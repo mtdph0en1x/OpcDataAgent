@@ -1,0 +1,79 @@
+﻿{
+  "OpcServers": [
+    {
+      "Name": "LocalOpcServer",
+      "Url": "opc.tcp://localhost:4840",
+      "SecurityPolicy": "None",
+      "ConnectionTimeout": 30000,
+      "SessionTimeout": 60000
+    }
+  ],
+  "ProductionLines": [
+    {
+      "LineId": "ProductionLine1",
+      "Name": "Primary Assembly Line",
+      "OpcServerName": "LocalOpcServer",
+      "DefaultSamplingInterval": "00:00:02",
+      "Devices": [
+        {
+          "DeviceId": "Device1",
+          "DeviceName": "Device 1",
+          "DeviceType": "Processor",
+          "Enabled": true,
+          "SamplingInterval": "00:00:02",
+          "NodePrefix": "Device 1",
+          "Sensors": [
+            {
+              "SensorName": "Temperature",
+              "NodePath": "Temperature",
+              "DataType": "double",
+              "Unit": "°C"
+            },
+            {
+              "SensorName": "ProductionStatus",
+              "NodePath": "ProductionStatus",
+              "DataType": "string",
+              "Unit": "status"
+            },
+            {
+              "SensorName": "WorkorderId",
+              "NodePath": "WorkorderId",
+              "DataType": "string",
+              "Unit": "id"
+            },
+            {
+              "SensorName": "ProductionRate",
+              "NodePath": "ProductionRate",
+              "DataType": "int",
+              "Unit": "units/hr"
+            },
+            {
+              "SensorName": "GoodCount",
+              "NodePath": "GoodCount",
+              "DataType": "int",
+              "Unit": "count"
+            },
+            {
+              "SensorName": "BadCount",
+              "NodePath": "BadCount",
+              "DataType": "int",
+              "Unit": "count"
+            },
+            {
+              "SensorName": "DeviceError",
+              "NodePath": "DeviceError",
+              "DataType": "int",
+              "Unit": "count"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "GlobalSettings": {
+    "NodeNamespace": "ns=2;s=",
+    "DefaultReconnectDelay": "00:00:05",
+    "MaxReconnectAttempts": 10,
+    "EnableDetailedLogging": true
+  }
+}

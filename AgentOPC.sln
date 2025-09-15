@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.2.32505.173
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AgentOPC.Console", "DeviceSdkDemo.Console\AgentOPC.Console.csproj", "{4E42D87A-F7ED-4768-ACEC-6EB1BF9BF51F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AgentOPC.Device", "DeviceSdkDemo.Device\AgentOPC.Device.csproj", "{836EB8E4-C9F8-489F-884E-DEDB1C77442C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4E42D87A-F7ED-4768-ACEC-6EB1BF9BF51F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4E42D87A-F7ED-4768-ACEC-6EB1BF9BF51F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4E42D87A-F7ED-4768-ACEC-6EB1BF9BF51F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4E42D87A-F7ED-4768-ACEC-6EB1BF9BF51F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{836EB8E4-C9F8-489F-884E-DEDB1C77442C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{836EB8E4-C9F8-489F-884E-DEDB1C77442C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{836EB8E4-C9F8-489F-884E-DEDB1C77442C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{836EB8E4-C9F8-489F-884E-DEDB1C77442C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {2AEE1F77-DC58-4EFB-89B4-764DDA432FA0}
+	EndGlobalSection
+EndGlobal
