@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿#region Using Statements
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -14,9 +15,11 @@ using Microsoft.Azure.Devices;
 using Microsoft.Azure.Devices.Shared;
 using DeviceClientMessage = Microsoft.Azure.Devices.Client.Message;
 using DeviceClientTransportType = Microsoft.Azure.Devices.Client.TransportType;
+#endregion
 
 namespace AgentOPC.Console
 {
+    #region Program Entry Point
     public class Program
     {
         public static async Task Main(string[] args)
@@ -61,9 +64,12 @@ namespace AgentOPC.Console
             }
         }
     }
+    #endregion
 
+    #region OPC Data Collection Service
     public class OpcDataCollectionService : BackgroundService
     {
+        #region Fields and Constructor
         private readonly ILogger<OpcDataCollectionService> _logger;
         private readonly ServiceBusClient _serviceBusClient;
         private readonly ConfigurationService _configService;
@@ -94,7 +100,9 @@ namespace AgentOPC.Console
             _logger.LogInformation($"Using IoT Hub for telemetry");
             _logger.LogInformation($"Using Service Bus queues - Data: {_deviceDataQueue}, Alerts: {_deviceAlertsQueue}");
         }
+        #endregion
 
+        #region Service Lifecycle
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             await InitializeAsync();
@@ -137,7 +145,9 @@ namespace AgentOPC.Console
                 throw;
             }
         }
+        #endregion
 
+        #region Initialization Methods
         private async Task InitializeOpcConnectionsAsync(OpcServerConfiguration[] opcServers)
         {
             foreach (var serverConfig in opcServers)
@@ -229,7 +239,9 @@ namespace AgentOPC.Console
 
             return hostNameParts[1];
         }
+        #endregion
 
+        #region Device Client Setup
         private async Task SetupDeviceClientHandlersAsync(DeviceClient deviceClient, DeviceMapping deviceMapping)
         {
             try
@@ -256,8 +268,9 @@ namespace AgentOPC.Console
                 _logger.LogError($"Failed to setup device handlers for {deviceMapping.DeviceId}: {ex.Message}");
             }
         }
+        #endregion
 
-        // Direct Method Handlers
+        #region Direct Method Handlers
         private async Task<MethodResponse> GetDeviceStatusHandler(MethodRequest methodRequest, object userContext)
         {
             var deviceMapping = (DeviceMapping)userContext;
@@ -445,8 +458,9 @@ namespace AgentOPC.Console
                 return new MethodResponse(Encoding.UTF8.GetBytes(errorResponse), 500);
             }
         }
+        #endregion
 
-        // Device Twin Handlers
+        #region Device Twin Handlers
         private async Task OnDesiredPropertyChangedAsync(TwinCollection desiredProperties, object userContext)
         {
             var deviceMapping = (DeviceMapping)userContext;
@@ -454,6 +468,14 @@ namespace AgentOPC.Console
 
             try
             {
+                // Production Rate - Write to OPC device when desired property changes
+                if (desiredProperties.Contains("productionRate"))
+                {
+                    var desiredRate = Convert.ToDouble(desiredProperties["productionRate"]);
+                    await SetProductionRateOnDevice(deviceMapping, desiredRate);
+                    _logger.LogInformation($"Set production rate to {desiredRate}% for device {deviceMapping.DeviceId}");
+                }
+
                 // Basic operational controls
                 if (desiredProperties.Contains("samplingInterval"))
                 {
@@ -468,46 +490,7 @@ namespace AgentOPC.Console
                     _logger.LogInformation($"Updated enabled status to {deviceMapping.Enabled} for device {deviceMapping.DeviceId}");
                 }
 
-                // Operational mode changes
-                if (desiredProperties.Contains("operationalMode"))
-                {
-                    var mode = (string)desiredProperties["operationalMode"];
-                    _logger.LogInformation($"Operational mode changed to {mode} for device {deviceMapping.DeviceId}");
-                    
-                    // Adjust sampling based on mode
-                    switch (mode.ToLower())
-                    {
-                        case "maintenance":
-                            deviceMapping.SamplingInterval = TimeSpan.FromSeconds(30); // Slower sampling
-                            break;
-                        case "critical":
-                            deviceMapping.SamplingInterval = TimeSpan.FromSeconds(1); // Fast sampling
-                            break;
-                        case "automatic":
-                        default:
-                            // Keep current interval
-                            break;
-                    }
-                }
-
-                // Configuration updates (ASA/Functions will handle thresholds and alerts)
-                if (desiredProperties.Contains("qualityThresholds"))
-                {
-                    _logger.LogInformation($"Quality thresholds updated for device {deviceMapping.DeviceId}");
-                }
-
-                if (desiredProperties.Contains("targetProductionRate"))
-                {
-                    var rate = (int)desiredProperties["targetProductionRate"];
-                    _logger.LogInformation($"Target production rate set to {rate} units/hour for device {deviceMapping.DeviceId}");
-                }
-
-                if (desiredProperties.Contains("productionSchedule"))
-                {
-                    _logger.LogInformation($"Production schedule updated for device {deviceMapping.DeviceId}");
-                }
-
-                // Update reported properties to acknowledge the change
+                // Update reported properties to acknowledge the changes
                 if (_deviceClients.TryGetValue(deviceMapping.DeviceId, out var deviceClient))
                 {
                     await UpdateReportedPropertiesAsync(deviceClient, deviceMapping);
@@ -519,20 +502,66 @@ namespace AgentOPC.Console
             }
         }
 
+        private async Task SetProductionRateOnDevice(DeviceMapping deviceMapping, double productionRate)
+        {
+            try
+            {
+                if (!_opcClients.TryGetValue(deviceMapping.OpcServerUrl, out var opcClient))
+                {
+                    _logger.LogError($"No OPC client found for {deviceMapping.OpcServerUrl}");
+                    return;
+                }
+
+                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.ProductionRate, out var productionRateNode))
+                {
+                    var writeNode = new OpcWriteNode(productionRateNode.NodeId, productionRate);
+                    opcClient.WriteNode(writeNode);
+
+                    // Update our local tracking
+                    productionRateNode.LastValue = productionRate;
+                    productionRateNode.LastRead = DateTime.UtcNow;
+
+                    _logger.LogInformation($"Successfully wrote production rate {productionRate}% to device {deviceMapping.DeviceId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to set production rate on device {deviceMapping.DeviceId}: {ex.Message}");
+                throw;
+            }
+        }
+        #endregion
+
         private async Task UpdateReportedPropertiesAsync(DeviceClient deviceClient, DeviceMapping deviceMapping)
         {
             try
             {
                 var reportedProperties = new TwinCollection();
-                
+
                 // Basic device info
                 reportedProperties["samplingInterval"] = deviceMapping.SamplingInterval.TotalSeconds;
                 reportedProperties["enabled"] = deviceMapping.Enabled;
                 reportedProperties["lineId"] = deviceMapping.LineId;
                 reportedProperties["lineName"] = deviceMapping.LineName;
-                reportedProperties["nodeCount"] = deviceMapping.DiscoveredNodes.Count;
+                reportedProperties["nodeCount"] = deviceMapping.StandardNodes.Count;
                 reportedProperties["lastUpdateTime"] = DateTime.UtcNow;
                 reportedProperties["agentVersion"] = "2.1";
+
+                // Production Rate (STATE) - Current value from OPC device
+                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.ProductionRate, out var productionRateNode) &&
+                    productionRateNode.LastValue != null)
+                {
+                    reportedProperties["productionRate"] = Convert.ToDouble(productionRateNode.LastValue);
+                }
+
+                // Device Errors (STATE) - Current error flags from OPC device
+                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceErrors, out var deviceErrorsNode) &&
+                    deviceErrorsNode.LastValue != null)
+                {
+                    var errorFlags = (DeviceErrorFlags)Convert.ToInt32(deviceErrorsNode.LastValue);
+                    reportedProperties["deviceErrors"] = (int)errorFlags;
+                    reportedProperties["deviceErrorsDescription"] = errorFlags.ToString();
+                }
 
                 // Operational status
                 reportedProperties["status"] = new
@@ -543,31 +572,14 @@ namespace AgentOPC.Console
                     connectionStatus = "connected"
                 };
 
-                // Current production metrics (calculated from recent data)
-                var recentNodes = deviceMapping.DiscoveredNodes.Where(n => n.LastRead > DateTime.UtcNow.AddMinutes(-5));
+                // Current production metrics (calculated from standard nodes)
+                var recentNodes = deviceMapping.StandardNodes.Values.Where(n => n.LastRead > DateTime.UtcNow.AddMinutes(-5));
                 reportedProperties["currentMetrics"] = new
                 {
                     activeNodeCount = recentNodes.Count(),
-                    dataQuality = recentNodes.Any() ? (double)recentNodes.Count() / deviceMapping.DiscoveredNodes.Count : 0.0,
-                    lastDataReceived = deviceMapping.DiscoveredNodes.Any() ? 
-                        deviceMapping.DiscoveredNodes.Max(n => n.LastRead) : DateTime.MinValue
-                };
-
-                // Performance indicators for Azure Functions
-                reportedProperties["kpi"] = new
-                {
-                    efficiency = CalculateEfficiency(deviceMapping), // Custom calculation
-                    availability = deviceMapping.Enabled ? 1.0 : 0.0,
-                    quality = CalculateQuality(deviceMapping), // Custom calculation
-                    oee = CalculateOEE(deviceMapping) // Overall Equipment Effectiveness
-                };
-
-                // Status tracking (for ASA/Functions to process)
-                reportedProperties["operationalStatus"] = new
-                {
-                    lastReportTime = DateTime.UtcNow,
-                    dataPoints = deviceMapping.DiscoveredNodes.Count,
-                    samplingRate = deviceMapping.SamplingInterval.TotalSeconds
+                    dataQuality = recentNodes.Any() ? (double)recentNodes.Count() / deviceMapping.StandardNodes.Count : 0.0,
+                    lastDataReceived = deviceMapping.StandardNodes.Values.Any() ?
+                        deviceMapping.StandardNodes.Values.Max(n => n.LastRead) : DateTime.MinValue
                 };
 
                 // Configuration acknowledgment
@@ -575,7 +587,7 @@ namespace AgentOPC.Console
                 {
                     lastConfigUpdate = DateTime.UtcNow,
                     pendingChanges = false,
-                    configVersion = "1.0"
+                    configVersion = "2.0"
                 };
 
                 await deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
@@ -587,31 +599,8 @@ namespace AgentOPC.Console
             }
         }
 
-        // Helper methods for KPI calculations
-        private double CalculateEfficiency(DeviceMapping deviceMapping)
-        {
-            // Example: percentage of nodes successfully read in last hour
-            var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-            var recentReads = deviceMapping.DiscoveredNodes.Count(n => n.LastRead > oneHourAgo);
-            return deviceMapping.DiscoveredNodes.Count > 0 ? (double)recentReads / deviceMapping.DiscoveredNodes.Count : 0.0;
-        }
 
-        private double CalculateQuality(DeviceMapping deviceMapping)
-        {
-            // Example: percentage of valid (non-null) readings
-            var validValues = deviceMapping.DiscoveredNodes.Count(n => n.LastValue != null);
-            return deviceMapping.DiscoveredNodes.Count > 0 ? (double)validValues / deviceMapping.DiscoveredNodes.Count : 0.0;
-        }
-
-        private double CalculateOEE(DeviceMapping deviceMapping)
-        {
-            // Overall Equipment Effectiveness = Availability × Performance × Quality
-            var availability = deviceMapping.Enabled ? 1.0 : 0.0;
-            var performance = CalculateEfficiency(deviceMapping);
-            var quality = CalculateQuality(deviceMapping);
-            return availability * performance * quality;
-        }
-
+        #region Device Monitoring
         private async Task MonitorDeviceAsync(DeviceMapping deviceMapping, CancellationToken cancellationToken)
         {
             if (!_opcClients.TryGetValue(deviceMapping.OpcServerUrl, out var opcClient))
@@ -633,80 +622,163 @@ namespace AgentOPC.Console
                 _logger.LogWarning($"Using Service Bus fallback for {deviceMapping.DeviceId}");
             }
 
-            await using var alertSender = _serviceBusClient.CreateSender(_deviceAlertsQueue);
-
             _logger.LogInformation($"Starting monitoring: {deviceMapping.DeviceId} ({deviceMapping.LineName}) via {telemetrySender.GetType().Name}");
 
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
-            {
-                try
                 {
-                    // Read all sensor nodes for this device
-                    var readNodes = deviceMapping.DiscoveredNodes
-                        .Select(n => new OpcReadNode(n.NodeId))
-                        .ToArray();
-
-                    var values = opcClient.ReadNodes(readNodes).ToArray();
-
-                    // Build device data message
-                    var deviceData = new DeviceDataMessage
+                    try
                     {
-                        DeviceId = deviceMapping.DeviceId,
-                        DeviceName = deviceMapping.DeviceId, // Use DeviceId as name since DeviceName doesn't exist
-                        DeviceType = "OPC", // Default device type since DeviceType doesn't exist in DeviceMapping
-                        LineId = deviceMapping.LineId,
-                        LineName = deviceMapping.LineName,
-                        Timestamp = DateTime.UtcNow,
-                        Data = new Dictionary<string, object>()
-                    };
+                        // Read all standard nodes for this device
+                        var readNodes = deviceMapping.StandardNodes.Values
+                            .Select(n => new OpcReadNode(n.NodeId))
+                            .ToArray();
 
-                    for (int i = 0; i < deviceMapping.DiscoveredNodes.Count && i < values.Length; i++)
-                    {
-                        var discoveredNode = deviceMapping.DiscoveredNodes[i];
-                        var opcValue = values[i];
+                        var values = opcClient.ReadNodes(readNodes).ToArray();
+                        var standardNodesList = deviceMapping.StandardNodes.Values.ToArray();
 
-                        if (opcValue.Status.IsGood)
+                        // Track previous device error state for event detection (use PreviousValue)
+                        var previousDeviceErrors = DeviceErrorFlags.None;
+                        if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceErrors, out var errorNode) &&
+                            errorNode.PreviousValue != null)
                         {
-                            var value = ConvertValue(opcValue.Value, discoveredNode.DataType);
-                            deviceData.Data[discoveredNode.NodeName] = value;
-
-                            // Update the discovered node with latest value
-                            discoveredNode.LastValue = value;
-                            discoveredNode.LastRead = DateTime.UtcNow;
-
-                            // Note: No alert checking here - that's handled by Azure Functions
+                            previousDeviceErrors = (DeviceErrorFlags)Convert.ToInt32(errorNode.PreviousValue);
                         }
-                        else
+
+                        // Build telemetry data (only TELEMETRY nodes)
+                        var telemetryData = new DeviceDataMessage
                         {
-                            _logger.LogWarning($"Bad OPC value for {deviceMapping.DeviceId}.{discoveredNode.NodeName}: {opcValue.Status}");
-                            deviceData.Data[discoveredNode.NodeName] = null;
+                            DeviceId = deviceMapping.DeviceId,
+                            DeviceName = deviceMapping.DeviceId,
+                            DeviceType = "OPC",
+                            LineId = deviceMapping.LineId,
+                            LineName = deviceMapping.LineName,
+                            Timestamp = DateTime.UtcNow,
+                            Data = new Dictionary<string, object>()
+                        };
+
+                        // Track state changes for Device Twin updates
+                        var stateNodes = new List<StandardDataNode>();
+                        var hasStateChanges = false;
+
+                        // Process all node values
+                        for (int i = 0; i < standardNodesList.Length && i < values.Length; i++)
+                        {
+                            var standardNode = standardNodesList[i];
+                            var opcValue = values[i];
+
+                            if (opcValue.Status.IsGood)
+                            {
+                                var value = ConvertValue(opcValue.Value, standardNode.DataType);
+
+                                // Store previous value for change detection
+                                standardNode.PreviousValue = standardNode.LastValue;
+                                standardNode.LastValue = value;
+                                standardNode.LastRead = DateTime.UtcNow;
+
+                                // Route data based on transmission type
+                                switch (standardNode.TransmissionType)
+                                {
+                                    case DataTransmissionType.Telemetry:
+                                        // Add to telemetry message
+                                        telemetryData.Data[standardNode.NodeName] = value;
+                                        break;
+
+                                    case DataTransmissionType.ReportedState:
+                                        // Track for Device Twin update
+                                        stateNodes.Add(standardNode);
+                                        if (standardNode.HasValueChanged)
+                                        {
+                                            hasStateChanges = true;
+                                        }
+
+                                        // Special handling for Device Errors: also include in telemetry and send as event when changed
+                                        if (standardNode.NodeType == DataNodeType.DeviceErrors)
+                                        {
+                                            // Always include current error codes in telemetry data for ASA
+                                            var currentErrorCode = Convert.ToInt32(value);
+                                            var currentErrors = (DeviceErrorFlags)currentErrorCode;
+                                            telemetryData.Data["DeviceErrorCode"] = currentErrorCode;
+                                            telemetryData.Data["DeviceErrorDescription"] = currentErrors.ToString();
+
+                                            // Send error event only when changed
+                                            if (standardNode.HasValueChanged)
+                                            {
+                                                var errorEvent = new DeviceErrorEventMessage
+                                                {
+                                                    DeviceId = deviceMapping.DeviceId,
+                                                    LineId = deviceMapping.LineId,
+                                                    LineName = deviceMapping.LineName,
+                                                    PreviousErrors = previousDeviceErrors,
+                                                    CurrentErrors = currentErrors,
+                                                    Timestamp = DateTime.UtcNow
+                                                };
+
+                                                _logger.LogInformation($"Device error state changed for {deviceMapping.DeviceId}: {previousDeviceErrors} -> {currentErrors}");
+                                                await telemetrySender.SendDeviceErrorEventAsync(errorEvent);
+                                            }
+                                        }
+                                        break;
+
+                                    case DataTransmissionType.Event:
+                                        // This case is now handled in ReportedState for DeviceErrors
+                                        break;
+                                }
+                            }
+                            else
+                            {
+                                // Only log BadNodeIdUnknown as debug, other errors as warnings
+                                if (opcValue.Status.ToString().Contains("BadNodeIdUnknown"))
+                                {
+                                    _logger.LogDebug($"Node {standardNode.NodeName} not found on {deviceMapping.DeviceId} - skipping");
+                                }
+                                else
+                                {
+                                    _logger.LogWarning($"Bad OPC value for {deviceMapping.DeviceId}.{standardNode.NodeName}: {opcValue.Status}");
+                                }
+
+                                // Still include in telemetry as null if it's a telemetry node
+                                if (standardNode.TransmissionType == DataTransmissionType.Telemetry)
+                                {
+                                    telemetryData.Data[standardNode.NodeName] = null;
+                                }
+                            }
                         }
+
+                        // Send telemetry data (always sent)
+                        if (telemetryData.Data.Any())
+                        {
+                            await telemetrySender.SendTelemetryAsync(telemetryData);
+                            _logger.LogDebug($"Sent telemetry for {deviceMapping.DeviceId}");
+                        }
+
+                        // Update Device Twin reported properties if state changes occurred
+                        if (hasStateChanges && _deviceClients.TryGetValue(deviceMapping.DeviceId, out var deviceClient2))
+                        {
+                            await UpdateReportedPropertiesAsync(deviceClient2, deviceMapping);
+                        }
+
+                        await Task.Delay(deviceMapping.SamplingInterval, cancellationToken);
                     }
-
-                    // Send device data to IoT Hub
-                    await telemetrySender.SendTelemetryAsync(deviceData);
-
-                    _logger.LogDebug($"Sent data for {deviceMapping.DeviceId}");
-                    await Task.Delay(deviceMapping.SamplingInterval, cancellationToken);
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"Error monitoring {deviceMapping.DeviceId}: {ex.Message}");
+                        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError($"Error monitoring {deviceMapping.DeviceId}: {ex.Message}");
-                    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-                }
-            }
             }
             finally
             {
                 await telemetrySender.DisposeAsync();
             }
         }
+        #endregion
 
        
 
-        
+
+        #region Utility Methods
         private object ConvertValue(object value, string dataType)
         {
             if (value == null) return null;
@@ -755,14 +827,20 @@ namespace AgentOPC.Console
 
             await base.StopAsync(cancellationToken);
         }
+        #endregion
     }
+    #endregion
 
-    // Telemetry sender abstractions
+    #region Telemetry Abstractions
     public interface ITelemetrySender : IAsyncDisposable
     {
         Task SendTelemetryAsync(DeviceDataMessage deviceData);
+        Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent);
+        Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties);
     }
+    #endregion
 
+    #region Telemetry Implementations
     public class IoTHubTelemetrySender : ITelemetrySender
     {
         private readonly DeviceClient _deviceClient;
@@ -787,6 +865,33 @@ namespace AgentOPC.Console
 
             await _deviceClient.SendEventAsync(message);
             _logger.LogDebug($"Sent telemetry to IoT Hub: {deviceData.DeviceId}");
+        }
+
+        public async Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent)
+        {
+            var messageBody = JsonConvert.SerializeObject(errorEvent);
+            var message = new DeviceClientMessage(Encoding.UTF8.GetBytes(messageBody));
+
+            // Add properties for ASA routing
+            message.Properties["deviceId"] = errorEvent.DeviceId;
+            message.Properties["lineId"] = errorEvent.LineId;
+            message.Properties["messageType"] = "deviceError";
+            message.Properties["eventType"] = "errorStateChange";
+
+            await _deviceClient.SendEventAsync(message);
+            _logger.LogInformation($"Sent device error event to IoT Hub: {errorEvent.DeviceId} - {errorEvent.PreviousErrors} -> {errorEvent.CurrentErrors}");
+        }
+
+        public async Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties)
+        {
+            var twinCollection = new TwinCollection();
+            foreach (var prop in reportedProperties)
+            {
+                twinCollection[prop.Key] = prop.Value;
+            }
+
+            await _deviceClient.UpdateReportedPropertiesAsync(twinCollection);
+            _logger.LogDebug($"Updated reported properties to IoT Hub");
         }
 
         public async ValueTask DisposeAsync()
@@ -819,13 +924,83 @@ namespace AgentOPC.Console
             _logger.LogDebug($"Sent telemetry to Service Bus: {deviceData.DeviceId}");
         }
 
+        public async Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent)
+        {
+            await _sender.SendMessageAsync(
+                new ServiceBusMessage(JsonConvert.SerializeObject(errorEvent))
+                {
+                    Subject = errorEvent.LineId,
+                    MessageId = Guid.NewGuid().ToString(),
+                    ContentType = "application/json"
+                });
+
+            _logger.LogInformation($"Sent device error event to Service Bus: {errorEvent.DeviceId}");
+        }
+
+        public async Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties)
+        {
+            _logger.LogWarning("Service Bus sender cannot update device twin reported properties - IoT Hub connection required");
+        }
+
         public async ValueTask DisposeAsync()
         {
             await _sender.DisposeAsync();
         }
     }
+    #endregion
 
-    // Enhanced message classes
+    #region Data Node Definitions
+    public enum DataNodeType
+    {
+        ProductionStatus,
+        WorkorderId,
+        ProductionRate,
+        GoodCount,
+        BadCount,
+        Temperature,
+        DeviceErrors
+    }
+
+    public enum DataTransmissionType
+    {
+        Telemetry,
+        ReportedState,
+        Event
+    }
+
+    public enum ProductionStatus
+    {
+        Stopped = 0,
+        Running = 1
+    }
+
+    [Flags]
+    public enum DeviceErrorFlags
+    {
+        None = 0,              // 0000
+        EmergencyStop = 1,     // 0001
+        PowerFailure = 2,      // 0010
+        SensorFailure = 4,     // 0100
+        Unknown = 8            // 1000
+    }
+
+    public class StandardDataNode
+    {
+        public DataNodeType NodeType { get; set; }
+        public string NodeId { get; set; } = string.Empty;
+        public string NodeName { get; set; } = string.Empty;
+        public DataTransmissionType TransmissionType { get; set; }
+        public bool IsWritable { get; set; }
+        public string DataType { get; set; } = string.Empty;
+        public object? LastValue { get; set; }
+        public DateTime LastRead { get; set; }
+        public object? PreviousValue { get; set; }
+
+        public bool HasValueChanged => !Equals(LastValue, PreviousValue);
+    }
+    #endregion
+
+    #region Message Classes
     public class DeviceDataMessage
     {
         public string DeviceId { get; set; } = string.Empty;
@@ -860,4 +1035,15 @@ namespace AgentOPC.Console
         public int ProductionRate { get; set; }
         public int ErrorCount { get; set; }
     }
+
+    public class DeviceErrorEventMessage
+    {
+        public string DeviceId { get; set; } = string.Empty;
+        public string LineId { get; set; } = string.Empty;
+        public string LineName { get; set; } = string.Empty;
+        public DeviceErrorFlags PreviousErrors { get; set; }
+        public DeviceErrorFlags CurrentErrors { get; set; }
+        public DateTime Timestamp { get; set; }
+    }
+    #endregion
 }

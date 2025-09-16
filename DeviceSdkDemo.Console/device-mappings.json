@@ -19,19 +19,25 @@
           "DeviceId": "Device1",
           "OpcNodePrefix": "Device 1",
           "Enabled": true,
-          "SamplingInterval": "00:00:02"
+          "SamplingInterval": "00:00:02",
+          "ValidateNodesOnStartup": true,
+          "DisabledNodes": []
         },
         {
           "DeviceId": "Device2",
           "OpcNodePrefix": "Device 2",
           "Enabled": true,
-          "SamplingInterval": "00:00:03"
+          "SamplingInterval": "00:00:03",
+          "ValidateNodesOnStartup": true,
+          "DisabledNodes": []
         },
         {
           "DeviceId": "Device3",
           "OpcNodePrefix": "Device 3",
           "Enabled": true,
-          "SamplingInterval": "00:00:05"
+          "SamplingInterval": "00:00:05",
+          "ValidateNodesOnStartup": true,
+          "DisabledNodes": []
         }
       ]
     }

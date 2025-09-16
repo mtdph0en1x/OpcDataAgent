@@ -1,0 +1,53 @@
+{
+  "opcServers": [
+    {
+      "name": "LocalOpcServer",
+      "url": "opc.tcp://localhost:4840",
+      "securityPolicy": "None",
+      "connectionTimeout": 30000,
+      "sessionTimeout": 60000
+    }
+  ],
+  "productionLines": [
+    {
+      "lineId": "Line1",
+      "name": "Production Line 1",
+      "opcServerName": "LocalOpcServer",
+      "defaultSamplingInterval": "00:00:02",
+      "devices": [
+        {
+          "deviceId": "Device1",
+          "opcNodePrefix": "Device 1",
+          "enabled": true,
+          "samplingInterval": "00:00:02",
+          "validateNodesOnStartup": true,
+          "disabledNodes": []
+        },
+        {
+          "deviceId": "Device2",
+          "opcNodePrefix": "Device 2",
+          "enabled": true,
+          "samplingInterval": "00:00:02",
+          "validateNodesOnStartup": true,
+          "disabledNodes": ["WorkorderId", "DeviceErrors"]
+        }
+      ]
+    }
+  ],
+  "globalSettings": {
+    "nodeNamespace": "ns=2;s=",
+    "defaultReconnectDelay": "00:00:05",
+    "maxReconnectAttempts": 10,
+    "enableDetailedLogging": true,
+    "autoDiscoverNodes": false,
+    "standardNodeNames": [
+      "ProductionStatus",
+      "WorkorderID",
+      "ProductionRate",
+      "GoodCount",
+      "BadCount",
+      "Temperature",
+      "DeviceErrors"
+    ]
+  }
+}

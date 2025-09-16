@@ -34,6 +34,8 @@ namespace AgentOPC.Console.Configuration
         public string OpcNodePrefix { get; set; } = string.Empty; // e.g., "Device 1"
         public bool Enabled { get; set; } = true;
         public TimeSpan SamplingInterval { get; set; } = TimeSpan.FromSeconds(2);
+        public bool ValidateNodesOnStartup { get; set; } = true;
+        public string[] DisabledNodes { get; set; } = Array.Empty<string>(); // Node names to skip
     }
 
     public class GlobalSettings
@@ -57,6 +59,77 @@ namespace AgentOPC.Console.Configuration
         public TimeSpan SamplingInterval { get; set; }
         public bool Enabled { get; set; }
         public List<DiscoveredNode> DiscoveredNodes { get; set; } = new();
+        public Dictionary<DataNodeType, StandardDataNode> StandardNodes { get; set; } = new();
+
+        public static Dictionary<DataNodeType, StandardDataNode> CreateStandardNodes(string opcNodePrefix)
+        {
+            return new Dictionary<DataNodeType, StandardDataNode>
+            {
+                [DataNodeType.ProductionStatus] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.ProductionStatus,
+                    NodeId = $"ns=2;s={opcNodePrefix}/ProductionStatus",
+                    NodeName = "ProductionStatus",
+                    TransmissionType = DataTransmissionType.Telemetry,
+                    IsWritable = false,
+                    DataType = "int"
+                },
+                [DataNodeType.WorkorderId] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.WorkorderId,
+                    NodeId = $"ns=2;s={opcNodePrefix}/WorkorderId",
+                    NodeName = "WorkorderId",
+                    TransmissionType = DataTransmissionType.Telemetry,
+                    IsWritable = false,
+                    DataType = "string"
+                },
+                [DataNodeType.ProductionRate] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.ProductionRate,
+                    NodeId = $"ns=2;s={opcNodePrefix}/ProductionRate",
+                    NodeName = "ProductionRate",
+                    TransmissionType = DataTransmissionType.ReportedState,
+                    IsWritable = true,
+                    DataType = "double"
+                },
+                [DataNodeType.GoodCount] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.GoodCount,
+                    NodeId = $"ns=2;s={opcNodePrefix}/GoodCount",
+                    NodeName = "GoodCount",
+                    TransmissionType = DataTransmissionType.Telemetry,
+                    IsWritable = false,
+                    DataType = "int"
+                },
+                [DataNodeType.BadCount] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.BadCount,
+                    NodeId = $"ns=2;s={opcNodePrefix}/BadCount",
+                    NodeName = "BadCount",
+                    TransmissionType = DataTransmissionType.Telemetry,
+                    IsWritable = false,
+                    DataType = "int"
+                },
+                [DataNodeType.Temperature] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.Temperature,
+                    NodeId = $"ns=2;s={opcNodePrefix}/Temperature",
+                    NodeName = "Temperature",
+                    TransmissionType = DataTransmissionType.Telemetry,
+                    IsWritable = false,
+                    DataType = "double"
+                },
+                [DataNodeType.DeviceErrors] = new StandardDataNode
+                {
+                    NodeType = DataNodeType.DeviceErrors,
+                    NodeId = $"ns=2;s={opcNodePrefix}/DeviceError",
+                    NodeName = "DeviceError",
+                    TransmissionType = DataTransmissionType.ReportedState, // Changed to ReportedState, events handled separately
+                    IsWritable = false,
+                    DataType = "int"
+                }
+            };
+        }
     }
 
     public class DiscoveredNode

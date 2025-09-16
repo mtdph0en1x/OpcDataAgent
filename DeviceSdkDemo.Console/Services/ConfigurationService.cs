@@ -79,6 +79,30 @@ namespace AgentOPC.Console.Services
                         Enabled = device.Enabled
                     };
 
+                    // Initialize standard nodes
+                    deviceMapping.StandardNodes = DeviceMapping.CreateStandardNodes(device.OpcNodePrefix);
+
+                    // Validate nodes if enabled and filter out disabled ones
+                    if (device.ValidateNodesOnStartup)
+                    {
+                        deviceMapping.StandardNodes = await ValidateAndFilterStandardNodesAsync(
+                            opcServer.Url,
+                            deviceMapping.StandardNodes,
+                            device.DisabledNodes);
+                    }
+                    else if (device.DisabledNodes.Any())
+                    {
+                        // Just filter out disabled nodes without validation
+                        var disabledNodeTypes = device.DisabledNodes
+                            .Where(name => Enum.TryParse<DataNodeType>(name, true, out _))
+                            .Select(name => Enum.Parse<DataNodeType>(name, true))
+                            .ToHashSet();
+
+                        deviceMapping.StandardNodes = deviceMapping.StandardNodes
+                            .Where(kvp => !disabledNodeTypes.Contains(kvp.Key))
+                            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                    }
+
                     // Auto-discover nodes if enabled
                     if (config.GlobalSettings.AutoDiscoverNodes)
                     {
@@ -157,6 +181,82 @@ namespace AgentOPC.Console.Services
             }
 
             return discoveredNodes;
+        }
+
+        private async Task<Dictionary<DataNodeType, StandardDataNode>> ValidateAndFilterStandardNodesAsync(
+            string opcServerUrl,
+            Dictionary<DataNodeType, StandardDataNode> standardNodes,
+            string[] disabledNodes)
+        {
+            var validatedNodes = new Dictionary<DataNodeType, StandardDataNode>();
+            var disabledNodeTypes = disabledNodes
+                .Where(name => Enum.TryParse<DataNodeType>(name, true, out _))
+                .Select(name => Enum.Parse<DataNodeType>(name, true))
+                .ToHashSet();
+
+            OpcClient? opcClient = null;
+
+            try
+            {
+                opcClient = new OpcClient(opcServerUrl);
+                opcClient.Connect();
+
+                _logger.LogDebug($"Validating standard nodes for server: {opcServerUrl}");
+
+                foreach (var kvp in standardNodes)
+                {
+                    var nodeType = kvp.Key;
+                    var standardNode = kvp.Value;
+
+                    // Skip if explicitly disabled
+                    if (disabledNodeTypes.Contains(nodeType))
+                    {
+                        _logger.LogInformation($"Skipping disabled node: {nodeType}");
+                        continue;
+                    }
+
+                    try
+                    {
+                        // Test if node exists by trying to read it
+                        var readNode = new OpcReadNode(standardNode.NodeId);
+                        var result = opcClient.ReadNode(readNode);
+
+                        if (result.Status.IsGood)
+                        {
+                            // Node exists and is readable
+                            standardNode.LastValue = result.Value;
+                            standardNode.LastRead = DateTime.UtcNow;
+                            validatedNodes[nodeType] = standardNode;
+                            _logger.LogDebug($"Validated standard node: {nodeType} ({standardNode.NodeId})");
+                        }
+                        else
+                        {
+                            _logger.LogWarning($"Standard node {nodeType} exists but has bad status: {result.Status}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning($"Standard node {nodeType} ({standardNode.NodeId}) not available: {ex.Message}");
+                        // Node doesn't exist or is not accessible, skip it
+                    }
+                }
+
+                _logger.LogInformation($"Validated {validatedNodes.Count} of {standardNodes.Count} standard nodes");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error validating standard nodes: {ex.Message}");
+                // Return original nodes if validation fails
+                return standardNodes.Where(kvp => !disabledNodeTypes.Contains(kvp.Key))
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+            }
+            finally
+            {
+                opcClient?.Disconnect();
+                opcClient?.Dispose();
+            }
+
+            return validatedNodes;
         }
 
         private string InferDataType(object? value)
