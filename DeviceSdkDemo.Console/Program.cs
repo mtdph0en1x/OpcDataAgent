@@ -8,6 +8,11 @@ using Newtonsoft.Json;
 using Opc.UaFx;
 using AgentOPC.Console.Configuration;
 using AgentOPC.Console.Services;
+using Microsoft.Azure.Devices.Client;
+using System.Text;
+using Microsoft.Azure.Devices;
+using DeviceClientMessage = Microsoft.Azure.Devices.Client.Message;
+using DeviceClientTransportType = Microsoft.Azure.Devices.Client.TransportType;
 
 namespace AgentOPC.Console
 {
@@ -42,7 +47,7 @@ namespace AgentOPC.Console
                 .Build();
 
             System.Console.WriteLine("=== OPC Data Agent Starting ===");
-            System.Console.WriteLine("Configuration-driven OPC UA to Service Bus bridge");
+            System.Console.WriteLine("Configuration-driven OPC UA to IoT Hub + Service Bus bridge");
             System.Console.WriteLine();
 
             try
@@ -64,9 +69,9 @@ namespace AgentOPC.Console
         private readonly ConfigurationService _configService;
         private readonly IConfiguration _configuration;
         private readonly Dictionary<string, OpcClient> _opcClients;
+        private readonly Dictionary<string, DeviceClient> _deviceClients;
         private List<DeviceMapping> _deviceMappings = new();
 
-        // Queue names from configuration
         private readonly string _deviceDataQueue;
         private readonly string _deviceAlertsQueue;
 
@@ -81,12 +86,13 @@ namespace AgentOPC.Console
             _configService = configService;
             _configuration = configuration;
             _opcClients = new Dictionary<string, OpcClient>();
+            _deviceClients = new Dictionary<string, DeviceClient>(); // Only initialize once
 
-            // Read queue names from configuration
             _deviceDataQueue = _configuration["ServiceBusQueues:DeviceData"] ?? "device-data";
             _deviceAlertsQueue = _configuration["ServiceBusQueues:DeviceAlerts"] ?? "device-alerts";
 
-            _logger.LogInformation($"Using queues - Data: {_deviceDataQueue}, Alerts: {_deviceAlertsQueue}");
+            _logger.LogInformation($"Using IoT Hub for telemetry");
+            _logger.LogInformation($"Using Service Bus queues - Data: {_deviceDataQueue}, Alerts: {_deviceAlertsQueue}");
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -115,6 +121,9 @@ namespace AgentOPC.Console
 
                 // Initialize OPC connections
                 await InitializeOpcConnectionsAsync(opcConfig.OpcServers);
+
+                // Initialize IoT Hub connections
+                await InitializeIoTHubAsync();
 
                 _logger.LogInformation($"Initialization complete:");
                 _logger.LogInformation($"  - {opcConfig.OpcServers.Length} OPC servers");
@@ -151,6 +160,59 @@ namespace AgentOPC.Console
             }
         }
 
+        private async Task InitializeIoTHubAsync()
+        {
+            try
+            {
+                var serviceConnectionString = _configuration.GetConnectionString("IoTHubService");
+                var registryManager = RegistryManager.CreateFromConnectionString(serviceConnectionString);
+
+                foreach (var deviceMapping in _deviceMappings.Where(d => d.Enabled))
+                {
+                    try
+                    {
+                        // Try to get existing device, or create if it doesn't exist
+                        var device = await registryManager.GetDeviceAsync(deviceMapping.DeviceId);
+                        if (device == null)
+                        {
+                            _logger.LogInformation($"Creating IoT Hub device: {deviceMapping.DeviceId}");
+                            device = await registryManager.AddDeviceAsync(new Microsoft.Azure.Devices.Device(deviceMapping.DeviceId));
+                        }
+
+                        // Build connection string for this device
+                        var hostName = GetHostNameFromConnectionString(serviceConnectionString);
+                        var deviceConnectionString = $"HostName={hostName};DeviceId={deviceMapping.DeviceId};SharedAccessKey={device.Authentication.SymmetricKey.PrimaryKey}";
+
+                        var deviceClient = DeviceClient.CreateFromConnectionString(deviceConnectionString, DeviceClientTransportType.Mqtt);
+                        await deviceClient.OpenAsync();
+
+                        _deviceClients[deviceMapping.DeviceId] = deviceClient;
+
+                        _logger.LogInformation($"Connected to IoT Hub: {deviceMapping.DeviceId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"Failed to initialize device {deviceMapping.DeviceId}: {ex.Message}");
+                        // Continue with other devices
+                    }
+                }
+
+                await registryManager.CloseAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to initialize IoT Hub connections: {ex.Message}");
+                throw;
+            }
+        }
+
+        private string GetHostNameFromConnectionString(string connectionString)
+        {
+            return connectionString.Split(';')
+                .FirstOrDefault(part => part.StartsWith("HostName="))
+                ?.Split('=')[1] ?? "";
+        }
+
         private async Task MonitorDeviceAsync(DeviceMapping deviceMapping, CancellationToken cancellationToken)
         {
             if (!_opcClients.TryGetValue(deviceMapping.OpcServerUrl, out var opcClient))
@@ -159,10 +221,22 @@ namespace AgentOPC.Console
                 return;
             }
 
-            var dataSender = _serviceBusClient.CreateSender(_deviceDataQueue);
+            // Always use IoT Hub for telemetry, Service Bus for alerts
+            ITelemetrySender telemetrySender;
+            if (_deviceClients.TryGetValue(deviceMapping.DeviceId, out var deviceClient))
+            {
+                telemetrySender = new IoTHubTelemetrySender(deviceClient, _logger);
+            }
+            else
+            {
+                // Fallback to Service Bus if IoT Hub connection failed
+                telemetrySender = new ServiceBusTelemetrySender(_serviceBusClient.CreateSender(_deviceDataQueue), _logger);
+                _logger.LogWarning($"Using Service Bus fallback for {deviceMapping.DeviceId}");
+            }
+
             var alertSender = _serviceBusClient.CreateSender(_deviceAlertsQueue);
 
-            _logger.LogInformation($"Starting monitoring: {deviceMapping.DeviceId} ({deviceMapping.DeviceName})");
+            _logger.LogInformation($"Starting monitoring: {deviceMapping.DeviceId} ({deviceMapping.DeviceName}) via {telemetrySender.GetType().Name}");
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -208,14 +282,8 @@ namespace AgentOPC.Console
                         }
                     }
 
-                    // Send device data to Service Bus
-                    await dataSender.SendMessageAsync(
-                        new ServiceBusMessage(JsonConvert.SerializeObject(deviceData))
-                        {
-                            Subject = deviceMapping.LineId,
-                            MessageId = Guid.NewGuid().ToString(),
-                            ContentType = "application/json"
-                        });
+                    // Send device data to IoT Hub
+                    await telemetrySender.SendTelemetryAsync(deviceData);
 
                     _logger.LogDebug($"Sent data for {deviceMapping.DeviceId}");
                     await Task.Delay(deviceMapping.SamplingInterval, cancellationToken);
@@ -227,7 +295,7 @@ namespace AgentOPC.Console
                 }
             }
 
-            await dataSender.DisposeAsync();
+            await telemetrySender.DisposeAsync();
             await alertSender.DisposeAsync();
         }
 
@@ -356,6 +424,21 @@ namespace AgentOPC.Console
         {
             _logger.LogInformation("Stopping OPC Data Agent...");
 
+            // Close all IoT Hub device clients
+            foreach (var deviceClient in _deviceClients.Values)
+            {
+                try
+                {
+                    await deviceClient.CloseAsync();
+                    deviceClient.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Error closing device client: {ex.Message}");
+                }
+            }
+
+            // Close all OPC clients
             foreach (var opcClient in _opcClients.Values)
             {
                 try
@@ -370,6 +453,74 @@ namespace AgentOPC.Console
             }
 
             await base.StopAsync(cancellationToken);
+        }
+    }
+
+    // Telemetry sender abstractions
+    public interface ITelemetrySender : IAsyncDisposable
+    {
+        Task SendTelemetryAsync(DeviceDataMessage deviceData);
+    }
+
+    public class IoTHubTelemetrySender : ITelemetrySender
+    {
+        private readonly DeviceClient _deviceClient;
+        private readonly ILogger _logger;
+
+        public IoTHubTelemetrySender(DeviceClient deviceClient, ILogger logger)
+        {
+            _deviceClient = deviceClient;
+            _logger = logger;
+        }
+
+        public async Task SendTelemetryAsync(DeviceDataMessage deviceData)
+        {
+            var messageBody = JsonConvert.SerializeObject(deviceData);
+            var message = new DeviceClientMessage(Encoding.UTF8.GetBytes(messageBody));
+
+            // Add properties for ASA routing
+            message.Properties["deviceId"] = deviceData.DeviceId;
+            message.Properties["lineId"] = deviceData.LineId;
+            message.Properties["deviceType"] = deviceData.DeviceType;
+            message.Properties["messageType"] = "telemetry";
+
+            await _deviceClient.SendEventAsync(message);
+            _logger.LogDebug($"Sent telemetry to IoT Hub: {deviceData.DeviceId}");
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            // Don't close the device client here - it's managed by the main service
+        }
+    }
+
+    public class ServiceBusTelemetrySender : ITelemetrySender
+    {
+        private readonly ServiceBusSender _sender;
+        private readonly ILogger _logger;
+
+        public ServiceBusTelemetrySender(ServiceBusSender sender, ILogger logger)
+        {
+            _sender = sender;
+            _logger = logger;
+        }
+
+        public async Task SendTelemetryAsync(DeviceDataMessage deviceData)
+        {
+            await _sender.SendMessageAsync(
+                new ServiceBusMessage(JsonConvert.SerializeObject(deviceData))
+                {
+                    Subject = deviceData.LineId,
+                    MessageId = Guid.NewGuid().ToString(),
+                    ContentType = "application/json"
+                });
+
+            _logger.LogDebug($"Sent telemetry to Service Bus: {deviceData.DeviceId}");
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _sender.DisposeAsync();
         }
     }
 
