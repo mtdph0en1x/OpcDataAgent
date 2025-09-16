@@ -1,6 +1,8 @@
 ﻿using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using AgentOPC.Console.Configuration;
+using Opc.UaFx.Client;
+using Opc.UaFx;
 
 namespace AgentOPC.Console.Services
 {
@@ -51,7 +53,7 @@ namespace AgentOPC.Console.Services
             }
         }
 
-        public List<DeviceMapping> ConvertToDeviceMappings(OpcConfiguration config)
+        public async Task<List<DeviceMapping>> ConvertToDeviceMappingsAsync(OpcConfiguration config)
         {
             var deviceMappings = new List<DeviceMapping>();
             var opcServers = config.OpcServers.ToDictionary(s => s.Name, s => s);
@@ -69,42 +71,109 @@ namespace AgentOPC.Console.Services
                     var deviceMapping = new DeviceMapping
                     {
                         DeviceId = device.DeviceId,
-                        DeviceName = device.DeviceName,
-                        DeviceType = device.DeviceType,
                         LineId = line.LineId,
                         LineName = line.Name,
                         OpcServerUrl = opcServer.Url,
+                        OpcNodePrefix = device.OpcNodePrefix,
                         SamplingInterval = device.SamplingInterval,
-                        Enabled = device.Enabled,
-                        NodeMappings = ConvertSensorsToNodeMappings(device, config.GlobalSettings)
+                        Enabled = device.Enabled
                     };
 
+                    // Auto-discover nodes if enabled
+                    if (config.GlobalSettings.AutoDiscoverNodes)
+                    {
+                        deviceMapping.DiscoveredNodes = await DiscoverDeviceNodesAsync(
+                            opcServer.Url,
+                            device.OpcNodePrefix,
+                            config.GlobalSettings);
+                    }
+
                     deviceMappings.Add(deviceMapping);
-                    _logger.LogDebug($"Created device mapping: {device.DeviceId} on {line.LineId}");
+                    _logger.LogInformation($"Created device mapping: {device.DeviceId} with {deviceMapping.DiscoveredNodes.Count} nodes");
                 }
             }
 
-            _logger.LogInformation($"Converted {deviceMappings.Count} device mappings from configuration");
             return deviceMappings;
         }
 
-        private NodeMapping[] ConvertSensorsToNodeMappings(DeviceConfiguration device, GlobalSettings globalSettings)
+        private async Task<List<DiscoveredNode>> DiscoverDeviceNodesAsync(
+            string opcServerUrl,
+            string nodePrefix,
+            GlobalSettings globalSettings)
         {
-            return device.Sensors.Select(sensor => new NodeMapping
+            var discoveredNodes = new List<DiscoveredNode>();
+            OpcClient? opcClient = null;
+
+            try
             {
-                SensorName = sensor.SensorName,
-                NodeId = $"{globalSettings.NodeNamespace}{device.NodePrefix}/{sensor.NodePath}",
-                DataType = sensor.DataType,
-                Unit = sensor.Unit,
-                WarningThreshold = sensor.AlertThresholds?.Warning,
-                CriticalThreshold = sensor.AlertThresholds?.Critical,
-                AlertDirection = sensor.AlertDirection
-            }).ToArray();
+                opcClient = new OpcClient(opcServerUrl);
+                opcClient.Connect();
+
+                _logger.LogDebug($"Discovering nodes for device prefix: {nodePrefix}");
+
+                // Try each standard node name
+                foreach (var nodeName in globalSettings.StandardNodeNames)
+                {
+                    var nodeId = $"{globalSettings.NodeNamespace}{nodePrefix}/{nodeName}";
+
+                    try
+                    {
+                        // Test if node exists by trying to read it
+                        var readNode = new OpcReadNode(nodeId);
+                        var result = opcClient.ReadNode(readNode);
+
+                        if (result.Status.IsGood)
+                        {
+                            var discoveredNode = new DiscoveredNode
+                            {
+                                NodeName = nodeName,
+                                NodeId = nodeId,
+                                DataType = InferDataType(result.Value),
+                                LastValue = result.Value,
+                                LastRead = DateTime.UtcNow
+                            };
+
+                            discoveredNodes.Add(discoveredNode);
+                            _logger.LogDebug($"Discovered node: {nodeId} ({discoveredNode.DataType})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug($"Node {nodeId} not available: {ex.Message}");
+                        // Node doesn't exist, skip it
+                    }
+                }
+
+                _logger.LogInformation($"Discovered {discoveredNodes.Count} nodes for device {nodePrefix}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error discovering nodes for {nodePrefix}: {ex.Message}");
+            }
+            finally
+            {
+                opcClient?.Disconnect();
+                opcClient?.Dispose();
+            }
+
+            return discoveredNodes;
+        }
+
+        private string InferDataType(object? value)
+        {
+            return value switch
+            {
+                double or float => "double",
+                int or short or long => "int",
+                bool => "bool",
+                string => "string",
+                _ => "object"
+            };
         }
 
         private void ValidateConfiguration(OpcConfiguration config)
         {
-            // Validate OPC servers
+            // Simplified validation - only check what's actually needed
             if (!config.OpcServers.Any())
             {
                 throw new InvalidOperationException("No OPC servers defined in configuration");
@@ -118,7 +187,6 @@ namespace AgentOPC.Console.Services
                     throw new InvalidOperationException($"OPC server URL cannot be empty for server '{server.Name}'");
             }
 
-            // Validate production lines
             if (!config.ProductionLines.Any())
             {
                 throw new InvalidOperationException("No production lines defined in configuration");

@@ -24,34 +24,16 @@ namespace AgentOPC.Console.Configuration
         public string Name { get; set; } = string.Empty;
         public string OpcServerName { get; set; } = string.Empty;
         public TimeSpan DefaultSamplingInterval { get; set; } = TimeSpan.FromSeconds(2);
-        public DeviceConfiguration[] Devices { get; set; } = Array.Empty<DeviceConfiguration>();
+        public SimplifiedDeviceConfiguration[] Devices { get; set; } = Array.Empty<SimplifiedDeviceConfiguration>();
     }
 
-    public class DeviceConfiguration
+    // Simplified device configuration - only what's actually needed
+    public class SimplifiedDeviceConfiguration
     {
         public string DeviceId { get; set; } = string.Empty;
-        public string DeviceName { get; set; } = string.Empty;
-        public string DeviceType { get; set; } = string.Empty;
+        public string OpcNodePrefix { get; set; } = string.Empty; // e.g., "Device 1"
         public bool Enabled { get; set; } = true;
         public TimeSpan SamplingInterval { get; set; } = TimeSpan.FromSeconds(2);
-        public string NodePrefix { get; set; } = string.Empty;
-        public Sensor[] Sensors { get; set; } = Array.Empty<Sensor>();
-    }
-
-    public class Sensor
-    {
-        public string SensorName { get; set; } = string.Empty;
-        public string NodePath { get; set; } = string.Empty;
-        public string DataType { get; set; } = "string";
-        public string Unit { get; set; } = string.Empty;
-        public AlertThresholds? AlertThresholds { get; set; }
-        public string AlertDirection { get; set; } = "above"; // "above" or "below"
-    }
-
-    public class AlertThresholds
-    {
-        public double? Warning { get; set; }
-        public double? Critical { get; set; }
     }
 
     public class GlobalSettings
@@ -60,34 +42,29 @@ namespace AgentOPC.Console.Configuration
         public TimeSpan DefaultReconnectDelay { get; set; } = TimeSpan.FromSeconds(5);
         public int MaxReconnectAttempts { get; set; } = 10;
         public bool EnableDetailedLogging { get; set; } = true;
+        public bool AutoDiscoverNodes { get; set; } = true;
+        public string[] StandardNodeNames { get; set; } = Array.Empty<string>();
     }
 
-    // Runtime models (converted from configuration)
+    // Runtime models
     public class DeviceMapping
     {
         public string DeviceId { get; set; } = string.Empty;
-        public string DeviceName { get; set; } = string.Empty;
-        public string DeviceType { get; set; } = string.Empty;
         public string LineId { get; set; } = string.Empty;
         public string LineName { get; set; } = string.Empty;
         public string OpcServerUrl { get; set; } = string.Empty;
+        public string OpcNodePrefix { get; set; } = string.Empty;
         public TimeSpan SamplingInterval { get; set; }
         public bool Enabled { get; set; }
-        public NodeMapping[] NodeMappings { get; set; } = Array.Empty<NodeMapping>();
+        public List<DiscoveredNode> DiscoveredNodes { get; set; } = new();
     }
 
-    public class NodeMapping
+    public class DiscoveredNode
     {
-        public string SensorName { get; set; } = string.Empty;
+        public string NodeName { get; set; } = string.Empty;
         public string NodeId { get; set; } = string.Empty;
-        public string DataType { get; set; } = "string";
-        public string Unit { get; set; } = string.Empty;
-        public double? WarningThreshold { get; set; }
-        public double? CriticalThreshold { get; set; }
-        public string AlertDirection { get; set; } = "above";
-
-        // Helper properties
-        public bool HasAlerts => WarningThreshold.HasValue || CriticalThreshold.HasValue;
-        public bool IsNumeric => DataType == "double" || DataType == "int" || DataType == "float";
+        public string DataType { get; set; } = string.Empty;
+        public object? LastValue { get; set; }
+        public DateTime LastRead { get; set; }
     }
 }
