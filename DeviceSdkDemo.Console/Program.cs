@@ -538,57 +538,34 @@ namespace AgentOPC.Console
             {
                 var reportedProperties = new TwinCollection();
 
-                // Basic device info
-                reportedProperties["samplingInterval"] = deviceMapping.SamplingInterval.TotalSeconds;
-                reportedProperties["enabled"] = deviceMapping.Enabled;
+                // Essential device configuration
+                reportedProperties["deviceId"] = deviceMapping.DeviceId;
                 reportedProperties["lineId"] = deviceMapping.LineId;
                 reportedProperties["lineName"] = deviceMapping.LineName;
-                reportedProperties["nodeCount"] = deviceMapping.StandardNodes.Count;
+                reportedProperties["enabled"] = deviceMapping.Enabled;
+                reportedProperties["samplingInterval"] = deviceMapping.SamplingInterval.TotalSeconds;
                 reportedProperties["lastUpdateTime"] = DateTime.UtcNow;
-                reportedProperties["agentVersion"] = "2.1";
 
-                // Production Rate (STATE) - Current value from OPC device
+                // Production Status - Current operational state from OPC device
+                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.ProductionStatus, out var productionStatusNode) &&
+                    productionStatusNode.LastValue != null)
+                {
+                    reportedProperties["productionStatus"] = Convert.ToInt32(productionStatusNode.LastValue);
+                }
+
+                // Production Rate - Current rate from OPC device (controllable via desired properties)
                 if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.ProductionRate, out var productionRateNode) &&
                     productionRateNode.LastValue != null)
                 {
                     reportedProperties["productionRate"] = Convert.ToDouble(productionRateNode.LastValue);
                 }
 
-                // Device Errors (STATE) - Current error flags from OPC device
-                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceErrors, out var deviceErrorsNode) &&
+                // Device Errors - Current error state from OPC device
+                if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceError, out var deviceErrorsNode) &&
                     deviceErrorsNode.LastValue != null)
                 {
-                    var errorFlags = (DeviceErrorFlags)Convert.ToInt32(deviceErrorsNode.LastValue);
-                    reportedProperties["deviceErrors"] = (int)errorFlags;
-                    reportedProperties["deviceErrorsDescription"] = errorFlags.ToString();
+                    reportedProperties["deviceErrors"] = Convert.ToInt32(deviceErrorsNode.LastValue);
                 }
-
-                // Operational status
-                reportedProperties["status"] = new
-                {
-                    state = deviceMapping.Enabled ? "running" : "stopped",
-                    health = "healthy", // Can be derived from OPC connection status
-                    uptime = DateTime.UtcNow.Subtract(DateTime.Today).TotalHours, // Hours since midnight
-                    connectionStatus = "connected"
-                };
-
-                // Current production metrics (calculated from standard nodes)
-                var recentNodes = deviceMapping.StandardNodes.Values.Where(n => n.LastRead > DateTime.UtcNow.AddMinutes(-5));
-                reportedProperties["currentMetrics"] = new
-                {
-                    activeNodeCount = recentNodes.Count(),
-                    dataQuality = recentNodes.Any() ? (double)recentNodes.Count() / deviceMapping.StandardNodes.Count : 0.0,
-                    lastDataReceived = deviceMapping.StandardNodes.Values.Any() ?
-                        deviceMapping.StandardNodes.Values.Max(n => n.LastRead) : DateTime.MinValue
-                };
-
-                // Configuration acknowledgment
-                reportedProperties["configurationStatus"] = new
-                {
-                    lastConfigUpdate = DateTime.UtcNow,
-                    pendingChanges = false,
-                    configVersion = "2.0"
-                };
 
                 await deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
                 _logger.LogDebug($"Updated reported properties for device {deviceMapping.DeviceId}");
@@ -635,12 +612,20 @@ namespace AgentOPC.Console
                             .Select(n => new OpcReadNode(n.NodeId))
                             .ToArray();
 
+                        // Skip if no nodes to read
+                        if (readNodes.Length == 0)
+                        {
+                            _logger.LogWarning($"No standard nodes configured for device {deviceMapping.DeviceId} - skipping telemetry");
+                            await Task.Delay(deviceMapping.SamplingInterval, cancellationToken);
+                            continue;
+                        }
+
                         var values = opcClient.ReadNodes(readNodes).ToArray();
                         var standardNodesList = deviceMapping.StandardNodes.Values.ToArray();
 
                         // Track previous device error state for event detection (use PreviousValue)
                         var previousDeviceErrors = DeviceErrorFlags.None;
-                        if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceErrors, out var errorNode) &&
+                        if (deviceMapping.StandardNodes.TryGetValue(DataNodeType.DeviceError, out var errorNode) &&
                             errorNode.PreviousValue != null)
                         {
                             previousDeviceErrors = (DeviceErrorFlags)Convert.ToInt32(errorNode.PreviousValue);
@@ -694,7 +679,7 @@ namespace AgentOPC.Console
                                         }
 
                                         // Special handling for Device Errors: also include in telemetry and send as event when changed
-                                        if (standardNode.NodeType == DataNodeType.DeviceErrors)
+                                        if (standardNode.NodeType == DataNodeType.DeviceError)
                                         {
                                             // Always include current error codes in telemetry data for ASA
                                             var currentErrorCode = Convert.ToInt32(value);
@@ -952,14 +937,31 @@ namespace AgentOPC.Console
     #region Data Node Definitions
     public enum DataNodeType
     {
+        // Core nodes (all devices)
         ProductionStatus,
+        DeviceType,
         WorkorderId,
         ProductionRate,
+        Temperature,
+        DeviceError,
+
+        // Device-specific nodes
+        // Press Device
+        Pressure,
+
+        // Conveyor Device
+        Speed,
+
+        // Quality Station Device
         GoodCount,
         BadCount,
-        Temperature,
-        DeviceErrors
+        PassRate,
+
+        // Compressor Device
+        OutputPressure,
+        SystemAirPressure
     }
+
 
     public enum DataTransmissionType
     {

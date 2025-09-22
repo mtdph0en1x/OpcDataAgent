@@ -75,201 +75,53 @@ namespace AgentOPC.Console.Services
                         LineName = line.Name,
                         OpcServerUrl = opcServer.Url,
                         OpcNodePrefix = device.OpcNodePrefix,
+                        DeviceType = device.DeviceType,
                         SamplingInterval = device.SamplingInterval,
                         Enabled = device.Enabled
                     };
 
-                    // Initialize standard nodes
-                    deviceMapping.StandardNodes = DeviceMapping.CreateStandardNodes(device.OpcNodePrefix);
-
-                    // Validate nodes if enabled and filter out disabled ones
-                    if (device.ValidateNodesOnStartup)
-                    {
-                        deviceMapping.StandardNodes = await ValidateAndFilterStandardNodesAsync(
-                            opcServer.Url,
-                            deviceMapping.StandardNodes,
-                            device.DisabledNodes);
-                    }
-                    else if (device.DisabledNodes.Any())
-                    {
-                        // Just filter out disabled nodes without validation
-                        var disabledNodeTypes = device.DisabledNodes
-                            .Where(name => Enum.TryParse<DataNodeType>(name, true, out _))
-                            .Select(name => Enum.Parse<DataNodeType>(name, true))
-                            .ToHashSet();
-
-                        deviceMapping.StandardNodes = deviceMapping.StandardNodes
-                            .Where(kvp => !disabledNodeTypes.Contains(kvp.Key))
-                            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-                    }
-
-                    // Auto-discover nodes if enabled
-                    if (config.GlobalSettings.AutoDiscoverNodes)
-                    {
-                        deviceMapping.DiscoveredNodes = await DiscoverDeviceNodesAsync(
-                            opcServer.Url,
-                            device.OpcNodePrefix,
-                            config.GlobalSettings);
-                    }
+                    // Initialize nodes from configuration
+                    deviceMapping.StandardNodes = CreateStandardNodesFromConfig(device.Nodes);
+                    _logger.LogInformation($"Created {deviceMapping.StandardNodes.Count} nodes for {device.DeviceId} ({device.DeviceType})");
 
                     deviceMappings.Add(deviceMapping);
-                    _logger.LogInformation($"Created device mapping: {device.DeviceId} with {deviceMapping.DiscoveredNodes.Count} nodes");
+                    _logger.LogInformation($"Created device mapping: {device.DeviceId}");
                 }
             }
 
             return deviceMappings;
         }
 
-        private async Task<List<DiscoveredNode>> DiscoverDeviceNodesAsync(
-            string opcServerUrl,
-            string nodePrefix,
-            GlobalSettings globalSettings)
+        private Dictionary<DataNodeType, StandardDataNode> CreateStandardNodesFromConfig(NodeConfiguration[] nodeConfigs)
         {
-            var discoveredNodes = new List<DiscoveredNode>();
-            OpcClient? opcClient = null;
+            var standardNodes = new Dictionary<DataNodeType, StandardDataNode>();
 
-            try
+            foreach (var nodeConfig in nodeConfigs)
             {
-                opcClient = new OpcClient(opcServerUrl);
-                opcClient.Connect();
-
-                _logger.LogDebug($"Discovering nodes for device prefix: {nodePrefix}");
-
-                // Try each standard node name
-                foreach (var nodeName in globalSettings.StandardNodeNames)
+                if (Enum.TryParse<DataNodeType>(nodeConfig.NodeType, true, out var nodeType) &&
+                    Enum.TryParse<DataTransmissionType>(nodeConfig.TransmissionType, true, out var transmissionType))
                 {
-                    var nodeId = $"{globalSettings.NodeNamespace}{nodePrefix}/{nodeName}";
-
-                    try
+                    var standardNode = new StandardDataNode
                     {
-                        // Test if node exists by trying to read it
-                        var readNode = new OpcReadNode(nodeId);
-                        var result = opcClient.ReadNode(readNode);
+                        NodeType = nodeType,
+                        NodeId = nodeConfig.NodeId,
+                        NodeName = nodeConfig.NodeType,
+                        TransmissionType = transmissionType,
+                        IsWritable = nodeConfig.IsWritable,
+                        DataType = nodeConfig.DataType
+                    };
 
-                        if (result.Status.IsGood)
-                        {
-                            var discoveredNode = new DiscoveredNode
-                            {
-                                NodeName = nodeName,
-                                NodeId = nodeId,
-                                DataType = InferDataType(result.Value),
-                                LastValue = result.Value,
-                                LastRead = DateTime.UtcNow
-                            };
-
-                            discoveredNodes.Add(discoveredNode);
-                            _logger.LogDebug($"Discovered node: {nodeId} ({discoveredNode.DataType})");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug($"Node {nodeId} not available: {ex.Message}");
-                        // Node doesn't exist, skip it
-                    }
+                    standardNodes[nodeType] = standardNode;
                 }
-
-                _logger.LogInformation($"Discovered {discoveredNodes.Count} nodes for device {nodePrefix}");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Error discovering nodes for {nodePrefix}: {ex.Message}");
-            }
-            finally
-            {
-                opcClient?.Disconnect();
-                opcClient?.Dispose();
-            }
-
-            return discoveredNodes;
-        }
-
-        private async Task<Dictionary<DataNodeType, StandardDataNode>> ValidateAndFilterStandardNodesAsync(
-            string opcServerUrl,
-            Dictionary<DataNodeType, StandardDataNode> standardNodes,
-            string[] disabledNodes)
-        {
-            var validatedNodes = new Dictionary<DataNodeType, StandardDataNode>();
-            var disabledNodeTypes = disabledNodes
-                .Where(name => Enum.TryParse<DataNodeType>(name, true, out _))
-                .Select(name => Enum.Parse<DataNodeType>(name, true))
-                .ToHashSet();
-
-            OpcClient? opcClient = null;
-
-            try
-            {
-                opcClient = new OpcClient(opcServerUrl);
-                opcClient.Connect();
-
-                _logger.LogDebug($"Validating standard nodes for server: {opcServerUrl}");
-
-                foreach (var kvp in standardNodes)
+                else
                 {
-                    var nodeType = kvp.Key;
-                    var standardNode = kvp.Value;
-
-                    // Skip if explicitly disabled
-                    if (disabledNodeTypes.Contains(nodeType))
-                    {
-                        _logger.LogInformation($"Skipping disabled node: {nodeType}");
-                        continue;
-                    }
-
-                    try
-                    {
-                        // Test if node exists by trying to read it
-                        var readNode = new OpcReadNode(standardNode.NodeId);
-                        var result = opcClient.ReadNode(readNode);
-
-                        if (result.Status.IsGood)
-                        {
-                            // Node exists and is readable
-                            standardNode.LastValue = result.Value;
-                            standardNode.LastRead = DateTime.UtcNow;
-                            validatedNodes[nodeType] = standardNode;
-                            _logger.LogDebug($"Validated standard node: {nodeType} ({standardNode.NodeId})");
-                        }
-                        else
-                        {
-                            _logger.LogWarning($"Standard node {nodeType} exists but has bad status: {result.Status}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning($"Standard node {nodeType} ({standardNode.NodeId}) not available: {ex.Message}");
-                        // Node doesn't exist or is not accessible, skip it
-                    }
+                    _logger.LogWarning($"Invalid node configuration: NodeType='{nodeConfig.NodeType}', TransmissionType='{nodeConfig.TransmissionType}'");
                 }
-
-                _logger.LogInformation($"Validated {validatedNodes.Count} of {standardNodes.Count} standard nodes");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Error validating standard nodes: {ex.Message}");
-                // Return original nodes if validation fails
-                return standardNodes.Where(kvp => !disabledNodeTypes.Contains(kvp.Key))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-            }
-            finally
-            {
-                opcClient?.Disconnect();
-                opcClient?.Dispose();
             }
 
-            return validatedNodes;
+            return standardNodes;
         }
 
-        private string InferDataType(object? value)
-        {
-            return value switch
-            {
-                double or float => "double",
-                int or short or long => "int",
-                bool => "bool",
-                string => "string",
-                _ => "object"
-            };
-        }
 
         private void ValidateConfiguration(OpcConfiguration config)
         {

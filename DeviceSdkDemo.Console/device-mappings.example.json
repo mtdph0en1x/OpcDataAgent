@@ -1,53 +1,176 @@
 {
-  "opcServers": [
+  "OpcServers": [
     {
-      "name": "LocalOpcServer",
-      "url": "opc.tcp://localhost:4840",
-      "securityPolicy": "None",
-      "connectionTimeout": 30000,
-      "sessionTimeout": 60000
+      "Name": "DemoOpcServer",
+      "Url": "opc.tcp://localhost:4840",
+      "SecurityPolicy": "None",
+      "ConnectionTimeout": 30000,
+      "SessionTimeout": 60000
+    },
+    {
+      "Name": "ProductionOpcServer",
+      "Url": "opc.tcp://production-server:4840",
+      "SecurityPolicy": "Basic256Sha256",
+      "ConnectionTimeout": 15000,
+      "SessionTimeout": 120000
     }
   ],
-  "productionLines": [
+  "ProductionLines": [
     {
-      "lineId": "Line1",
-      "name": "Production Line 1",
-      "opcServerName": "LocalOpcServer",
-      "defaultSamplingInterval": "00:00:02",
-      "devices": [
+      "LineId": "AssemblyLine1",
+      "Name": "Primary Assembly Line",
+      "OpcServerName": "DemoOpcServer",
+      "DefaultSamplingInterval": "00:00:02",
+      "Devices": [
         {
-          "deviceId": "Device1",
-          "opcNodePrefix": "Device 1",
-          "enabled": true,
-          "samplingInterval": "00:00:02",
-          "validateNodesOnStartup": true,
-          "disabledNodes": []
+          "DeviceId": "HydraulicPress001",
+          "OpcNodePrefix": "Press1",
+          "DeviceType": 0,
+          "Enabled": true,
+          "SamplingInterval": "00:00:02",
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Press1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Temperature",
+              "NodeId": "ns=2;s=Press1/Temperature",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "Pressure",
+              "NodeId": "ns=2;s=Press1/Pressure",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "ProductionRate",
+              "NodeId": "ns=2;s=Press1/ProductionRate",
+              "TransmissionType": "ReportedState",
+              "IsWritable": true,
+              "DataType": "int"
+            }
+          ]
         },
         {
-          "deviceId": "Device2",
-          "opcNodePrefix": "Device 2",
-          "enabled": true,
-          "samplingInterval": "00:00:02",
-          "validateNodesOnStartup": true,
-          "disabledNodes": ["WorkorderId", "DeviceErrors"]
+          "DeviceId": "ConveyorBelt001",
+          "OpcNodePrefix": "Conveyor1",
+          "DeviceType": 1,
+          "Enabled": true,
+          "SamplingInterval": "00:00:03",
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Conveyor1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Speed",
+              "NodeId": "ns=2;s=Conveyor1/Speed",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "ItemCount",
+              "NodeId": "ns=2;s=Conveyor1/ItemCount",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            }
+          ]
+        },
+        {
+          "DeviceId": "QualityInspection001",
+          "OpcNodePrefix": "QualityStation1",
+          "DeviceType": 2,
+          "Enabled": true,
+          "SamplingInterval": "00:00:02",
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=QualityStation1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "GoodCount",
+              "NodeId": "ns=2;s=QualityStation1/GoodCount",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "BadCount",
+              "NodeId": "ns=2;s=QualityStation1/BadCount",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "QualityScore",
+              "NodeId": "ns=2;s=QualityStation1/QualityScore",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "LineId": "PackagingLine1",
+      "Name": "Automated Packaging Line",
+      "OpcServerName": "ProductionOpcServer",
+      "DefaultSamplingInterval": "00:00:05",
+      "Devices": [
+        {
+          "DeviceId": "PackagingRobot001",
+          "OpcNodePrefix": "Robot1",
+          "DeviceType": 4,
+          "Enabled": true,
+          "SamplingInterval": "00:00:01",
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Robot1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "CycleTime",
+              "NodeId": "ns=2;s=Robot1/CycleTime",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "PackagesPerHour",
+              "NodeId": "ns=2;s=Robot1/PackagesPerHour",
+              "TransmissionType": "ReportedState",
+              "IsWritable": true,
+              "DataType": "int"
+            }
+          ]
         }
       ]
     }
   ],
-  "globalSettings": {
-    "nodeNamespace": "ns=2;s=",
-    "defaultReconnectDelay": "00:00:05",
-    "maxReconnectAttempts": 10,
-    "enableDetailedLogging": true,
-    "autoDiscoverNodes": false,
-    "standardNodeNames": [
-      "ProductionStatus",
-      "WorkorderID",
-      "ProductionRate",
-      "GoodCount",
-      "BadCount",
-      "Temperature",
-      "DeviceErrors"
-    ]
+  "GlobalSettings": {
+    "NodeNamespace": "ns=2;s=",
+    "DefaultReconnectDelay": "00:00:05",
+    "MaxReconnectAttempts": 10,
+    "EnableDetailedLogging": true
   }
 }

@@ -16,28 +16,180 @@
       "DefaultSamplingInterval": "00:00:02",
       "Devices": [
         {
-          "DeviceId": "Device1",
-          "OpcNodePrefix": "Device 1",
+          "DeviceId": "Press1",
+          "OpcNodePrefix": "Press1",
+          "DeviceType": 0,
           "Enabled": true,
           "SamplingInterval": "00:00:02",
-          "ValidateNodesOnStartup": true,
-          "DisabledNodes": []
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Press1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Temperature",
+              "NodeId": "ns=2;s=Press1/Temperature",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "Pressure",
+              "NodeId": "ns=2;s=Press1/Pressure",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "ProductionRate",
+              "NodeId": "ns=2;s=Press1/ProductionRate",
+              "TransmissionType": "ReportedState",
+              "IsWritable": true,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "DeviceError",
+              "NodeId": "ns=2;s=Press1/DeviceError",
+              "TransmissionType": "ReportedState",
+              "IsWritable": false,
+              "DataType": "int"
+            }
+          ]
         },
         {
-          "DeviceId": "Device2",
-          "OpcNodePrefix": "Device 2",
+          "DeviceId": "Conveyor1",
+          "OpcNodePrefix": "Conveyor1",
+          "DeviceType": 1,
           "Enabled": true,
           "SamplingInterval": "00:00:03",
-          "ValidateNodesOnStartup": true,
-          "DisabledNodes": []
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Conveyor1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Temperature",
+              "NodeId": "ns=2;s=Conveyor1/Temperature",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "ProductionRate",
+              "NodeId": "ns=2;s=Conveyor1/ProductionRate",
+              "TransmissionType": "ReportedState",
+              "IsWritable": true,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "DeviceError",
+              "NodeId": "ns=2;s=Conveyor1/DeviceError",
+              "TransmissionType": "ReportedState",
+              "IsWritable": false,
+              "DataType": "int"
+            }
+          ]
         },
         {
-          "DeviceId": "Device3",
-          "OpcNodePrefix": "Device 3",
+          "DeviceId": "QualityStation1",
+          "OpcNodePrefix": "QualityStation1",
+          "DeviceType": 2,
+          "Enabled": true,
+          "SamplingInterval": "00:00:02",
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=QualityStation1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Temperature",
+              "NodeId": "ns=2;s=QualityStation1/Temperature",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "GoodCount",
+              "NodeId": "ns=2;s=QualityStation1/GoodCount",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "BadCount",
+              "NodeId": "ns=2;s=QualityStation1/BadCount",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "ProductionRate",
+              "NodeId": "ns=2;s=QualityStation1/ProductionRate",
+              "TransmissionType": "ReportedState",
+              "IsWritable": true,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "DeviceError",
+              "NodeId": "ns=2;s=QualityStation1/DeviceError",
+              "TransmissionType": "ReportedState",
+              "IsWritable": false,
+              "DataType": "int"
+            }
+          ]
+        },
+        {
+          "DeviceId": "Compressor1",
+          "OpcNodePrefix": "Compressor1",
+          "DeviceType": 3,
           "Enabled": true,
           "SamplingInterval": "00:00:05",
-          "ValidateNodesOnStartup": true,
-          "DisabledNodes": []
+          "Nodes": [
+            {
+              "NodeType": "ProductionStatus",
+              "NodeId": "ns=2;s=Compressor1/ProductionStatus",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "int"
+            },
+            {
+              "NodeType": "Temperature",
+              "NodeId": "ns=2;s=Compressor1/Temperature",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "OutputPressure",
+              "NodeId": "ns=2;s=Compressor1/OutputPressure",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "SystemAirPressure",
+              "NodeId": "ns=2;s=Compressor1/SystemAirPressure",
+              "TransmissionType": "Telemetry",
+              "IsWritable": false,
+              "DataType": "double"
+            },
+            {
+              "NodeType": "DeviceError",
+              "NodeId": "ns=2;s=Compressor1/DeviceError",
+              "TransmissionType": "ReportedState",
+              "IsWritable": false,
+              "DataType": "int"
+            }
+          ]
         }
       ]
     }
@@ -46,19 +198,6 @@
     "NodeNamespace": "ns=2;s=",
     "DefaultReconnectDelay": "00:00:05",
     "MaxReconnectAttempts": 10,
-    "EnableDetailedLogging": true,
-    "AutoDiscoverNodes": true,
-    "StandardNodeNames": [
-      "ProductionStatus",
-      "WorkorderId",
-      "ProductionRate",
-      "Temperature",
-      "DeviceError",
-      "ConveyorSpeed",
-      "MotorCurrent",
-      "QualityScore",
-      "RejectCount",
-      "InspectionRate"
-    ]
+    "EnableDetailedLogging": true
   }
 }
