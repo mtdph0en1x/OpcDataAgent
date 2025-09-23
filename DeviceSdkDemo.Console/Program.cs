@@ -3,7 +3,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Azure.Messaging.ServiceBus;
 using Opc.UaFx.Client;
 using Newtonsoft.Json;
 using Opc.UaFx;
@@ -13,6 +12,7 @@ using Microsoft.Azure.Devices.Client;
 using System.Text;
 using Microsoft.Azure.Devices;
 using Microsoft.Azure.Devices.Shared;
+using Azure.Messaging.ServiceBus;
 using DeviceClientMessage = Microsoft.Azure.Devices.Client.Message;
 using DeviceClientTransportType = Microsoft.Azure.Devices.Client.TransportType;
 #endregion
@@ -36,8 +36,6 @@ namespace AgentOPC.Console
                 .ConfigureServices((context, services) =>
                 {
                     services.AddSingleton<IConfiguration>(config);
-                    services.AddSingleton(provider =>
-                        new ServiceBusClient(config.GetConnectionString("ServiceBus")));
                     services.AddSingleton<ConfigurationService>();
                     services.AddHostedService<OpcDataCollectionService>();
                 })
@@ -52,6 +50,7 @@ namespace AgentOPC.Console
             System.Console.WriteLine("=== OPC Data Agent Starting ===");
             System.Console.WriteLine("Configuration-driven OPC UA to IoT Hub + Service Bus bridge");
             System.Console.WriteLine();
+            System.Console.WriteLine($"Current Directory: {Directory.GetCurrentDirectory()}");
 
             try
             {
@@ -71,34 +70,26 @@ namespace AgentOPC.Console
     {
         #region Fields and Constructor
         private readonly ILogger<OpcDataCollectionService> _logger;
-        private readonly ServiceBusClient _serviceBusClient;
         private readonly ConfigurationService _configService;
         private readonly IConfiguration _configuration;
         private readonly Dictionary<string, OpcClient> _opcClients;
         private readonly Dictionary<string, DeviceClient> _deviceClients;
         private List<DeviceMapping> _deviceMappings = new();
-
-        private readonly string _deviceDataQueue;
-        private readonly string _deviceAlertsQueue;
+        private ServiceBusClient? _serviceBusClient;
+        private ServiceBusSender? _criticalAlertsSender;
 
         public OpcDataCollectionService(
             ILogger<OpcDataCollectionService> logger,
-            ServiceBusClient serviceBusClient,
             ConfigurationService configService,
             IConfiguration configuration)
         {
             _logger = logger;
-            _serviceBusClient = serviceBusClient;
             _configService = configService;
             _configuration = configuration;
             _opcClients = new Dictionary<string, OpcClient>();
             _deviceClients = new Dictionary<string, DeviceClient>(); // Only initialize once
 
-            _deviceDataQueue = _configuration["ServiceBusQueues:DeviceData"] ?? "device-data";
-            _deviceAlertsQueue = _configuration["ServiceBusQueues:DeviceAlerts"] ?? "device-alerts";
-
             _logger.LogInformation($"Using IoT Hub for telemetry");
-            _logger.LogInformation($"Using Service Bus queues - Data: {_deviceDataQueue}, Alerts: {_deviceAlertsQueue}");
         }
         #endregion
 
@@ -133,11 +124,14 @@ namespace AgentOPC.Console
                 // Initialize IoT Hub connections
                 await InitializeIoTHubAsync();
 
+                // Initialize Service Bus connections
+                await InitializeServiceBusAsync();
+
                 _logger.LogInformation($"Initialization complete:");
                 _logger.LogInformation($"  - {opcConfig.OpcServers.Length} OPC servers");
                 _logger.LogInformation($"  - {opcConfig.ProductionLines.Length} production lines");
                 _logger.LogInformation($"  - {_deviceMappings.Count} enabled devices");
-                _logger.LogInformation($"  - {_deviceMappings.Sum(d => d.DiscoveredNodes.Count)} discovered nodes");
+                _logger.LogInformation($"  - {_deviceMappings.Sum(d => d.StandardNodes.Count)} configured nodes");
             }
             catch (Exception ex)
             {
@@ -239,6 +233,110 @@ namespace AgentOPC.Console
 
             return hostNameParts[1];
         }
+
+        private async Task InitializeServiceBusAsync()
+        {
+            try
+            {
+                var opcConfig = await _configService.LoadConfigurationAsync();
+                var serviceBusConnectionString = opcConfig.GlobalSettings.ServiceBusConnectionString;
+
+                // Fallback to configuration connection string if not in GlobalSettings
+                if (string.IsNullOrEmpty(serviceBusConnectionString))
+                {
+                    serviceBusConnectionString = _configuration.GetConnectionString("ServiceBus");
+                }
+
+                if (string.IsNullOrEmpty(serviceBusConnectionString))
+                {
+                    _logger.LogInformation("Service Bus critical alerts disabled - no connection string provided");
+                    return;
+                }
+
+                // Check if critical alerts are enabled (default to true if not specified)
+                bool enableCriticalAlerts = opcConfig.GlobalSettings.EnableCriticalAlerts;
+                if (!enableCriticalAlerts)
+                {
+                    _logger.LogInformation("Service Bus critical alerts disabled in configuration");
+                    return;
+                }
+
+                _serviceBusClient = new ServiceBusClient(serviceBusConnectionString);
+                _criticalAlertsSender = _serviceBusClient.CreateSender("critical-alerts");
+
+                _logger.LogInformation("Service Bus critical alerts sender initialized for queue: critical-alerts");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to initialize Service Bus: {ex.Message}");
+                // Don't throw - allow the service to continue without Service Bus
+            }
+        }
+
+        private async Task SendCriticalAlertAsync(DeviceMapping deviceMapping, DeviceErrorFlags currentErrors)
+        {
+            if (_criticalAlertsSender == null)
+            {
+                _logger.LogDebug($"Service Bus sender is null, skipping critical alert for {deviceMapping.DeviceId}");
+                return;
+            }
+
+            try
+            {
+                _logger.LogDebug($"Checking critical alert for {deviceMapping.DeviceId}: currentErrors={currentErrors} ({(int)currentErrors})");
+
+                // Check if this is a critical error that needs immediate Service Bus notification
+                bool isCritical = currentErrors.HasFlag(DeviceErrorFlags.PowerFailure);
+
+                if (!isCritical)
+                {
+                    _logger.LogDebug($"Not a critical error for {deviceMapping.DeviceId}: {currentErrors}");
+                    return;
+                }
+
+                // Calculate priority (higher number = higher priority)
+                int priority = 0;
+                if (currentErrors.HasFlag(DeviceErrorFlags.PowerFailure)) priority += 10;
+                if (currentErrors.HasFlag(DeviceErrorFlags.SensorFailure)) priority += 4;
+                if (currentErrors.HasFlag(DeviceErrorFlags.Unknown)) priority += 2;
+
+                var criticalAlert = new CriticalErrorAlert
+                {
+                    DeviceId = deviceMapping.DeviceId,
+                    LineId = deviceMapping.LineId,
+                    DeviceError = (long)currentErrors,
+                    HasEmergencyStop = currentErrors.HasFlag(DeviceErrorFlags.EmergencyStop) ? 1 : 0,
+                    HasPowerFailure = currentErrors.HasFlag(DeviceErrorFlags.PowerFailure) ? 1 : 0,
+                    HasSensorFailure = currentErrors.HasFlag(DeviceErrorFlags.SensorFailure) ? 1 : 0,
+                    HasUnknownError = currentErrors.HasFlag(DeviceErrorFlags.Unknown) ? 1 : 0,
+                    ErrorPriority = priority,
+                    MessageType = "CriticalAlert",
+                    EventTime = DateTime.UtcNow
+                };
+
+                var messageBody = JsonConvert.SerializeObject(criticalAlert);
+                var message = new ServiceBusMessage(messageBody)
+                {
+                    ContentType = "application/json",
+                    MessageId = Guid.NewGuid().ToString(),
+                    Subject = "CriticalDeviceError"
+                };
+
+                // Add message properties for filtering
+                message.ApplicationProperties["DeviceId"] = deviceMapping.DeviceId;
+                message.ApplicationProperties["LineId"] = deviceMapping.LineId;
+                message.ApplicationProperties["ErrorPriority"] = priority;
+                message.ApplicationProperties["MessageType"] = "CriticalAlert";
+
+                await _criticalAlertsSender.SendMessageAsync(message);
+
+                _logger.LogWarning($"CRITICAL ALERT sent to Service Bus for {deviceMapping.DeviceId}: {currentErrors} (Priority: {priority})");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to send critical alert to Service Bus for {deviceMapping.DeviceId}: {ex.Message}");
+            }
+        }
         #endregion
 
         #region Device Client Setup
@@ -282,9 +380,9 @@ namespace AgentOPC.Console
                 LineName = deviceMapping.LineName,
                 IsEnabled = deviceMapping.Enabled,
                 SamplingInterval = deviceMapping.SamplingInterval.TotalSeconds,
-                LastDataCount = deviceMapping.DiscoveredNodes.Count,
-                LastUpdateTime = deviceMapping.DiscoveredNodes.Any() ? 
-                    deviceMapping.DiscoveredNodes.Max(n => n.LastRead) : DateTime.MinValue,
+                LastDataCount = deviceMapping.StandardNodes.Count,
+                LastUpdateTime = deviceMapping.StandardNodes.Values.Any() ?
+                    deviceMapping.StandardNodes.Values.Max(n => n.LastRead) : DateTime.MinValue,
                 Status = "Online"
             };
 
@@ -300,7 +398,7 @@ namespace AgentOPC.Console
             try
             {
                 // Simulate restart by resetting last read times
-                foreach (var node in deviceMapping.DiscoveredNodes)
+                foreach (var node in deviceMapping.StandardNodes.Values)
                 {
                     node.LastRead = DateTime.MinValue;
                     node.LastValue = null;
@@ -356,12 +454,12 @@ namespace AgentOPC.Console
             var deviceMapping = (DeviceMapping)userContext;
             _logger.LogInformation($"GetLastValues method called for device {deviceMapping.DeviceId}");
 
-            var lastValues = deviceMapping.DiscoveredNodes.ToDictionary(
+            var lastValues = deviceMapping.StandardNodes.Values.ToDictionary(
                 node => node.NodeName,
-                node => new { 
+                node => new {
                     value = node.LastValue,
                     lastRead = node.LastRead,
-                    dataType = node.DataType 
+                    dataType = node.DataType
                 }
             );
 
@@ -586,17 +684,17 @@ namespace AgentOPC.Console
                 return;
             }
 
-            // Always use IoT Hub for telemetry, Service Bus for alerts
+            // Always use IoT Hub for telemetry
             ITelemetrySender telemetrySender;
             if (_deviceClients.TryGetValue(deviceMapping.DeviceId, out var deviceClient))
             {
                 telemetrySender = new IoTHubTelemetrySender(deviceClient, _logger);
+                _logger.LogDebug($"Using IoTHubTelemetrySender for {deviceMapping.DeviceId}");
             }
             else
             {
-                // Fallback to Service Bus if IoT Hub connection failed
-                telemetrySender = new ServiceBusTelemetrySender(_serviceBusClient.CreateSender(_deviceDataQueue), _logger);
-                _logger.LogWarning($"Using Service Bus fallback for {deviceMapping.DeviceId}");
+                _logger.LogError($"No IoT Hub client found for {deviceMapping.DeviceId}. Telemetry will not be sent.");
+                return;
             }
 
             _logger.LogInformation($"Starting monitoring: {deviceMapping.DeviceId} ({deviceMapping.LineName}) via {telemetrySender.GetType().Name}");
@@ -668,6 +766,34 @@ namespace AgentOPC.Console
                                     case DataTransmissionType.Telemetry:
                                         // Add to telemetry message
                                         telemetryData.Data[standardNode.NodeName] = value;
+
+                                        // Special handling for Device Errors: also send as event when changed and add DeviceErrorCode
+                                        if (standardNode.NodeType == DataNodeType.DeviceError)
+                                        {
+                                            // Always include current error codes in telemetry data for ASA (both ways)
+                                            var currentErrorCode = Convert.ToInt32(value);
+                                            var currentErrors = (DeviceErrorFlags)currentErrorCode;
+                                            telemetryData.Data["DeviceErrorCode"] = currentErrorCode;
+
+                                            // Send error event only when changed
+                                            if (standardNode.HasValueChanged)
+                                            {
+                                                var errorEvent = new DeviceErrorEventMessage
+                                                {
+                                                    DeviceId = deviceMapping.DeviceId,
+                                                    LineId = deviceMapping.LineId,
+                                                    LineName = deviceMapping.LineName,
+                                                    PreviousErrors = previousDeviceErrors,
+                                                    CurrentErrors = currentErrors,
+                                                    Timestamp = DateTime.UtcNow
+                                                };
+
+                                                _logger.LogInformation($"Device error state changed for {deviceMapping.DeviceId}: {previousDeviceErrors} -> {currentErrors}");
+
+                                                // Send critical alert to Service Bus if needed
+                                                await SendCriticalAlertAsync(deviceMapping, currentErrors);
+                                            }
+                                        }
                                         break;
 
                                     case DataTransmissionType.ReportedState:
@@ -685,7 +811,6 @@ namespace AgentOPC.Console
                                             var currentErrorCode = Convert.ToInt32(value);
                                             var currentErrors = (DeviceErrorFlags)currentErrorCode;
                                             telemetryData.Data["DeviceErrorCode"] = currentErrorCode;
-                                            telemetryData.Data["DeviceErrorDescription"] = currentErrors.ToString();
 
                                             // Send error event only when changed
                                             if (standardNode.HasValueChanged)
@@ -701,7 +826,9 @@ namespace AgentOPC.Console
                                                 };
 
                                                 _logger.LogInformation($"Device error state changed for {deviceMapping.DeviceId}: {previousDeviceErrors} -> {currentErrors}");
-                                                await telemetrySender.SendDeviceErrorEventAsync(errorEvent);
+
+                                                // Send critical alert to Service Bus if needed
+                                                await SendCriticalAlertAsync(deviceMapping, currentErrors);
                                             }
                                         }
                                         break;
@@ -735,7 +862,6 @@ namespace AgentOPC.Console
                         if (telemetryData.Data.Any())
                         {
                             await telemetrySender.SendTelemetryAsync(telemetryData);
-                            _logger.LogDebug($"Sent telemetry for {deviceMapping.DeviceId}");
                         }
 
                         // Update Device Twin reported properties if state changes occurred
@@ -796,6 +922,26 @@ namespace AgentOPC.Console
                 }
             }
 
+            // Close Service Bus connections
+            try
+            {
+                if (_criticalAlertsSender != null)
+                {
+                    await _criticalAlertsSender.DisposeAsync();
+                    _logger.LogInformation("Service Bus critical alerts sender disposed");
+                }
+
+                if (_serviceBusClient != null)
+                {
+                    await _serviceBusClient.DisposeAsync();
+                    _logger.LogInformation("Service Bus client disposed");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error disposing Service Bus resources: {ex.Message}");
+            }
+
             // Close all OPC clients
             foreach (var opcClient in _opcClients.Values)
             {
@@ -820,7 +966,6 @@ namespace AgentOPC.Console
     public interface ITelemetrySender : IAsyncDisposable
     {
         Task SendTelemetryAsync(DeviceDataMessage deviceData);
-        Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent);
         Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties);
     }
     #endregion
@@ -852,21 +997,6 @@ namespace AgentOPC.Console
             _logger.LogDebug($"Sent telemetry to IoT Hub: {deviceData.DeviceId}");
         }
 
-        public async Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent)
-        {
-            var messageBody = JsonConvert.SerializeObject(errorEvent);
-            var message = new DeviceClientMessage(Encoding.UTF8.GetBytes(messageBody));
-
-            // Add properties for ASA routing
-            message.Properties["deviceId"] = errorEvent.DeviceId;
-            message.Properties["lineId"] = errorEvent.LineId;
-            message.Properties["messageType"] = "deviceError";
-            message.Properties["eventType"] = "errorStateChange";
-
-            await _deviceClient.SendEventAsync(message);
-            _logger.LogInformation($"Sent device error event to IoT Hub: {errorEvent.DeviceId} - {errorEvent.PreviousErrors} -> {errorEvent.CurrentErrors}");
-        }
-
         public async Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties)
         {
             var twinCollection = new TwinCollection();
@@ -882,54 +1012,6 @@ namespace AgentOPC.Console
         public async ValueTask DisposeAsync()
         {
             // Don't close the device client here - it's managed by the main service
-        }
-    }
-
-    public class ServiceBusTelemetrySender : ITelemetrySender
-    {
-        private readonly ServiceBusSender _sender;
-        private readonly ILogger _logger;
-
-        public ServiceBusTelemetrySender(ServiceBusSender sender, ILogger logger)
-        {
-            _sender = sender;
-            _logger = logger;
-        }
-
-        public async Task SendTelemetryAsync(DeviceDataMessage deviceData)
-        {
-            await _sender.SendMessageAsync(
-                new ServiceBusMessage(JsonConvert.SerializeObject(deviceData))
-                {
-                    Subject = deviceData.LineId,
-                    MessageId = Guid.NewGuid().ToString(),
-                    ContentType = "application/json"
-                });
-
-            _logger.LogDebug($"Sent telemetry to Service Bus: {deviceData.DeviceId}");
-        }
-
-        public async Task SendDeviceErrorEventAsync(DeviceErrorEventMessage errorEvent)
-        {
-            await _sender.SendMessageAsync(
-                new ServiceBusMessage(JsonConvert.SerializeObject(errorEvent))
-                {
-                    Subject = errorEvent.LineId,
-                    MessageId = Guid.NewGuid().ToString(),
-                    ContentType = "application/json"
-                });
-
-            _logger.LogInformation($"Sent device error event to Service Bus: {errorEvent.DeviceId}");
-        }
-
-        public async Task UpdateReportedPropertiesAsync(Dictionary<string, object> reportedProperties)
-        {
-            _logger.LogWarning("Service Bus sender cannot update device twin reported properties - IoT Hub connection required");
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await _sender.DisposeAsync();
         }
     }
     #endregion
@@ -1031,11 +1113,6 @@ namespace AgentOPC.Console
         public int Priority { get; set; }
         public DateTime Timestamp { get; set; }
         public string SenderId { get; set; } = string.Empty;
-
-        // Backward compatibility properties for existing Azure Functions
-        public double Temperature { get; set; }
-        public int ProductionRate { get; set; }
-        public int ErrorCount { get; set; }
     }
 
     public class DeviceErrorEventMessage
@@ -1046,6 +1123,20 @@ namespace AgentOPC.Console
         public DeviceErrorFlags PreviousErrors { get; set; }
         public DeviceErrorFlags CurrentErrors { get; set; }
         public DateTime Timestamp { get; set; }
+    }
+
+    public class CriticalErrorAlert
+    {
+        public string DeviceId { get; set; } = string.Empty;
+        public string LineId { get; set; } = string.Empty;
+        public long DeviceError { get; set; }  // Changed to match ASA output
+        public int HasEmergencyStop { get; set; }
+        public int HasPowerFailure { get; set; }
+        public int HasSensorFailure { get; set; }
+        public int HasUnknownError { get; set; }
+        public int ErrorPriority { get; set; }
+        public string MessageType { get; set; } = "CriticalAlert";
+        public DateTime EventTime { get; set; } = DateTime.UtcNow;
     }
     #endregion
 }

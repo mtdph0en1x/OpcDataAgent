@@ -53,7 +53,7 @@
             {
               "NodeType": "DeviceError",
               "NodeId": "ns=2;s=Press1/DeviceError",
-              "TransmissionType": "ReportedState",
+              "TransmissionType": "Telemetry",
               "IsWritable": false,
               "DataType": "int"
             }
@@ -90,7 +90,7 @@
             {
               "NodeType": "DeviceError",
               "NodeId": "ns=2;s=Conveyor1/DeviceError",
-              "TransmissionType": "ReportedState",
+              "TransmissionType": "Telemetry",
               "IsWritable": false,
               "DataType": "int"
             }
@@ -141,7 +141,7 @@
             {
               "NodeType": "DeviceError",
               "NodeId": "ns=2;s=QualityStation1/DeviceError",
-              "TransmissionType": "ReportedState",
+              "TransmissionType": "Telemetry",
               "IsWritable": false,
               "DataType": "int"
             }
@@ -185,7 +185,7 @@
             {
               "NodeType": "DeviceError",
               "NodeId": "ns=2;s=Compressor1/DeviceError",
-              "TransmissionType": "ReportedState",
+              "TransmissionType": "Telemetry",
               "IsWritable": false,
               "DataType": "int"
             }

@@ -60,8 +60,8 @@ namespace AgentOPC.Console.Configuration
         public TimeSpan DefaultReconnectDelay { get; set; } = TimeSpan.FromSeconds(5);
         public int MaxReconnectAttempts { get; set; } = 10;
         public bool EnableDetailedLogging { get; set; } = true;
-        public bool AutoDiscoverNodes { get; set; } = true;
-        public string[] StandardNodeNames { get; set; } = Array.Empty<string>();
+        public string ServiceBusConnectionString { get; set; } = string.Empty;
+        public bool EnableCriticalAlerts { get; set; } = true;
     }
 
     // Runtime models
@@ -75,17 +75,8 @@ namespace AgentOPC.Console.Configuration
         public DeviceType DeviceType { get; set; } = DeviceType.Press;
         public TimeSpan SamplingInterval { get; set; }
         public bool Enabled { get; set; }
-        public List<DiscoveredNode> DiscoveredNodes { get; set; } = new();
         public Dictionary<DataNodeType, StandardDataNode> StandardNodes { get; set; } = new();
 
     }
 
-    public class DiscoveredNode
-    {
-        public string NodeName { get; set; } = string.Empty;
-        public string NodeId { get; set; } = string.Empty;
-        public string DataType { get; set; } = string.Empty;
-        public object? LastValue { get; set; }
-        public DateTime LastRead { get; set; }
-    }
 }
